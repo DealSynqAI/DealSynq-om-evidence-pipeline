@@ -488,7 +488,10 @@ def _sparse_page_table(
     populated_per_row = [sum(bool(str(cell or "").strip()) for cell in row) for row in rows]
     density = sum(populated_per_row) / (len(rows) * width)
     paired_rows = sum(count >= 2 for count in populated_per_row)
-    return density < 0.30 and paired_rows < 2
+    # A few unrelated panels on an otherwise sparse page can each put two
+    # strings in a row. Require repeated populated rows across the grid before
+    # letting a page-sized candidate own the whole page.
+    return density < 0.30 and paired_rows / len(rows) < 0.40
 
 
 def merge_visual_objects(
@@ -815,6 +818,12 @@ def inspect_pdf(pdf_path: Path) -> tuple[list[PageInspection], dict[str, Any]]:
                     continue
                 if _sparse_page_table(bbox, rows, width, height):
                     warnings.append(f"ignored_sparse_page_frame_table_{table_index}")
+                    continue
+                # A text box or portrait border can be reported as a table by
+                # the PDF line finder. With fewer than two populated cells it
+                # has no row/value structure to preserve as a table.
+                if len(rows) <= 2 and sum(bool(str(cell or "").strip()) for row in rows for cell in row) < 2:
+                    warnings.append(f"ignored_empty_table_frame_{table_index}")
                     continue
                 table_candidates.append((table, bbox, rows))
             all_images = []

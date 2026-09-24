@@ -204,6 +204,11 @@ def _exclusive_region_lines(
             members = cell_boxes(region.metadata.get("member_coordinates"))
             if members and any(_contains(box, line) for box in members):
                 value += 0.5
+            elif members:
+                # The visual's padded search box may overlap a neighboring
+                # paragraph. Prefer a genuine text region for words outside
+                # every physical image member when both claim the line.
+                value -= 1.5
         return value
 
     for line in page_lines:
@@ -603,12 +608,12 @@ def _ocr_text(lines: list[dict[str, Any]]) -> str:
     # Image-backed PDF text may appear twice: RapidOCR contributes a full
     # phrase while positioned native words contribute each word separately.
     # Keep both in provenance, but render an overlapping word only once.
-    phrases = [line for line in lines if
-        "-native-" not in str(line.get("evidence_id", ""))
-        and len(str(line.get("text", ""))) >= 20]
-
     def tokens(value: str) -> list[str]:
         return re.findall(r"\w+", _fold_token(value))
+
+    phrases = [line for line in lines if
+        "-native-" not in str(line.get("evidence_id", ""))
+        and len(tokens(str(line.get("text", "")))) >= 2]
 
     def covered(native: dict[str, Any]) -> bool:
         needle = tokens(str(native.get("text", "")))

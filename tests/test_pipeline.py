@@ -38,6 +38,7 @@ from ocr_pipeline.pipeline import (
     _table_blocks,
     _exclusive_region_lines,
     _hybrid_text,
+    _ocr_text,
     _kpi_bindings,
     _map_data_value_lines,
     _reconstruct_vertical_values,
@@ -640,6 +641,20 @@ class PipelineUnitTests(unittest.TestCase):
             [f"Property {index}", f"${index * 100}", str(2020 + index)] for index in range(1, 8)
         ]
         self.assertFalse(_sparse_page_table((0, 0, 960, 540), actual_grid, 960, 540))
+        scattered_panels = [[None] * 13 for _ in range(17)]
+        for index in (2, 7, 16):
+            scattered_panels[index][0] = "Panel heading"
+            scattered_panels[index][8] = "Unrelated text"
+        self.assertTrue(_sparse_page_table((0, 0, 960, 540), scattered_panels, 960, 540))
+
+    def test_native_words_inside_short_ocr_phrase_render_once(self) -> None:
+        lines = [
+            {"evidence_id": "p001-ocr-0001", "text": "White Stone", "coordinates": [100, 100, 120, 20]},
+            {"evidence_id": "p001-native-0001", "text": "White", "coordinates": [102, 102, 50, 16]},
+            {"evidence_id": "p001-native-0002", "text": "Stone", "coordinates": [156, 102, 55, 16]},
+            {"evidence_id": "p001-native-0003", "text": "Marina", "coordinates": [300, 100, 60, 20]},
+        ]
+        self.assertEqual(_ocr_text(lines), "White Stone\nMarina")
 
     def test_adjacent_visual_objects_merge(self) -> None:
         merged = merge_visual_objects(
@@ -978,6 +993,17 @@ class PipelineUnitTests(unittest.TestCase):
         owners = _exclusive_region_lines(regions, lines)
         self.assertEqual([item["evidence_id"] for item in owners["visual"]], ["e1"])
         self.assertEqual(owners["text"], [])
+
+    def test_visual_padding_does_not_steal_neighboring_text(self) -> None:
+        regions = [
+            Region("visual", 1, "visual", [0, 0, 300, 100], 1, "test", 0.8,
+                   metadata={"member_coordinates": [[200, 0, 100, 100]]}),
+            Region("text", 1, "normal_text", [0, 0, 150, 100], 2, "test", 0.9),
+        ]
+        line = {"evidence_id": "e1", "coordinates": [40, 20, 50, 10], "text": "Neighboring text"}
+        owners = _exclusive_region_lines(regions, [line])
+        self.assertEqual(owners["visual"], [])
+        self.assertEqual([item["evidence_id"] for item in owners["text"]], ["e1"])
 
     def test_visual_search_crop_does_not_steal_text_outside_ownership_box(self) -> None:
         regions = [
