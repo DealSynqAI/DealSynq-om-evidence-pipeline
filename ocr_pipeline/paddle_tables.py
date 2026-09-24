@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
 import re
 from typing import Any
@@ -196,6 +197,57 @@ def table_candidates(payload: dict[str, Any], width: int, height: int) -> list[d
             "structure_status": "grid" if len(rows[0]) >= 2 else "layout_only",
         })
     return candidates
+
+
+def screen_table_candidates_against_ocr(
+    candidates: list[dict[str, Any]], ocr_lines: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Reject table transcripts contradicted by numeric OCR in their own crop.
+
+    PP-Structure can detect the correct grid but attach HTML text from a
+    different part of the page. This guard applies only when both sides have
+    enough distinct numbers for a meaningful comparison.
+    """
+    number_pattern = re.compile(r"(?<![A-Za-z])[-+]?\$?(\d[\d,]*(?:\.\d+)?)")
+
+    def numeric_keys(text: str) -> set[str]:
+        keys: set[str] = set()
+        for match in number_pattern.finditer(text):
+            raw = match.group(1).replace(",", "")
+            if len(raw.replace(".", "")) < 2:
+                continue
+            try:
+                keys.add(str(Decimal(raw).normalize()))
+            except InvalidOperation:
+                continue
+        return keys
+
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for candidate in candidates:
+        x, y, width, height = (float(value) for value in candidate["coordinates"])
+        nearby = [line for line in ocr_lines
+                  if (x - 8 <= float(line["coordinates"][0])
+                      + float(line["coordinates"][2]) / 2 <= x + width + 8)
+                  and (y - 8 <= float(line["coordinates"][1])
+                       + float(line["coordinates"][3]) / 2 <= y + height + 8)]
+        table_numbers = numeric_keys(" ".join(
+            str(cell or "") for row in candidate.get("rows", []) for cell in row
+        ))
+        crop_numbers = numeric_keys(" ".join(str(line.get("text", "")) for line in nearby))
+        matched = table_numbers & crop_numbers
+        if (len(table_numbers) >= 3 and len(crop_numbers) >= 3
+                and len(matched) < 2 and len(matched) / len(table_numbers) < 0.25):
+            rejected.append({
+                "candidate_index": candidate["index"],
+                "reason": "table transcript numbers disagree with independent OCR inside grid",
+                "table_numeric_count": len(table_numbers),
+                "crop_numeric_count": len(crop_numbers),
+                "matched_numeric_count": len(matched),
+            })
+            continue
+        accepted.append(candidate)
+    return accepted, rejected
 
 
 def _split_multi_table_regions(inspection: PageInspection, candidates: list[dict[str, Any]]) -> set[int]:
