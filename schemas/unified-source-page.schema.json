@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dealsynq.local/schemas/unified-source-page.schema.json",
+  "title": "DealSynq Unified Source Page v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "document_id", "source_sha256", "page", "blocks", "evidence_ledger", "evidence_disposition", "unassigned_evidence", "validation"],
+  "properties": {
+    "schema_version": {"const": "unified-source-page/4.0"},
+    "document_id": {"type": "string", "minLength": 1},
+    "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "page": {"type": "integer", "minimum": 1},
+    "blocks": {"type": "array", "items": {"type": "object"}},
+    "evidence_ledger": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rendered_page", "rendered_page_sha256", "ocr_engine", "ocr_lines"],
+      "properties": {"rendered_page": {"type": "string"}, "rendered_page_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "ocr_engine": {"type": ["string", "null"]}, "ocr_lines": {"type": "array", "items": {"type": "object"}}, "source_observations": {"type": "array", "items": {"type": "object"}}}
+    },
+    "evidence_disposition": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["evidence_id", "owner_block_id", "status"], "properties": {"evidence_id": {"type": "string"}, "owner_block_id": {"type": ["string", "null"]}, "status": {"enum": ["owned", "unassigned"]}}}},
+    "unassigned_evidence": {"type": "array", "items": {"type": "object"}},
+    "validation": {"type": "object", "additionalProperties": false, "required": ["valid", "errors", "completeness_status", "warnings"], "properties": {"valid": {"type": "boolean"}, "errors": {"type": "array", "items": {"type": "string"}}, "completeness_status": {"enum": ["complete", "needs_review"]}, "warnings": {"type": "array", "items": {"type": "string"}}}}
+  }
+}

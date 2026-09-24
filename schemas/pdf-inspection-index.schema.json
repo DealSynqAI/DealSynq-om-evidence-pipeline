@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dealsynq.local/schemas/pdf-inspection-index.schema.json",
+  "title": "DealSynq PDF Inspection Index",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "document_id", "source_sha256", "page_count", "selected_pages", "pdf_metadata", "pages"],
+  "properties": {
+    "schema_version": {"const": "pdf-inspection-index/1.0"}, "document_id": {"type": "string"},
+    "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "page_count": {"type": "integer", "minimum": 1},
+    "selected_pages": {"type": "array", "items": {"type": "integer", "minimum": 1}, "uniqueItems": true}, "pdf_metadata": {"type": "object"},
+    "pages": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["page", "file", "sha256", "region_count"], "properties": {"page": {"type": "integer", "minimum": 1}, "file": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "region_count": {"type": "integer", "minimum": 1}}}}
+  }
+}

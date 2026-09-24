@@ -1,0 +1,42 @@
+{
+  "document": "synthetic-portfolio-pie.pdf",
+  "page": 7,
+  "chart_title": "Portfolio Allocation",
+  "chart_type": "pie",
+  "expected_percentage_total": 100.0,
+  "expected_observations": {
+    "Office": "5.0%",
+    "Self-Storage": "14.0%",
+    "Land": "8.0%",
+    "Aviation": "1.0%",
+    "Industrial": "2.0%",
+    "Hospitality": "13.0%",
+    "Multifamily": "35.0%",
+    "Single Family": "10.0%",
+    "Healthcare": "4.0%",
+    "Retail": "8.0%"
+  },
+  "ocr_lines": [
+    {"evidence_id": "title", "text": "Portfolio Allocation", "coordinates": [386.6, 218.8, 226.3, 36.6]},
+    {"evidence_id": "aviation", "text": "Aviation", "coordinates": [679.9, 309.2, 75.1, 27.3]},
+    {"evidence_id": "aviation-value", "text": "1.0%", "coordinates": [690.0, 339.8, 49.9, 30.6]},
+    {"evidence_id": "office", "text": "Office", "coordinates": [360.9, 345.7, 59.0, 30.6]},
+    {"evidence_id": "office-value", "text": "5.0%", "coordinates": [362.4, 378.3, 51.4, 33.2]},
+    {"evidence_id": "self-storage", "text": "Self-Storage", "coordinates": [449.1, 346.4, 110.4, 33.9]},
+    {"evidence_id": "self-storage-value", "text": "14.0%", "coordinates": [471.8, 379.7, 59.5, 30.6]},
+    {"evidence_id": "land", "text": "Land", "coordinates": [597.8, 379.7, 48.9, 31.2]},
+    {"evidence_id": "land-value", "text": "8.0%", "coordinates": [594.3, 412.9, 50.4, 31.2]},
+    {"evidence_id": "industrial", "text": "Industrial", "coordinates": [702.6, 391.6, 84.2, 27.3]},
+    {"evidence_id": "industrial-value", "text": "2.0%", "coordinates": [717.7, 423.5, 47.9, 29.3]},
+    {"evidence_id": "retail", "text": "Retail", "coordinates": [329.1, 433.5, 59.0, 33.2]},
+    {"evidence_id": "retail-value", "text": "8.0%", "coordinates": [330.6, 466.1, 51.9, 33.9]},
+    {"evidence_id": "healthcare", "text": "Healthcare", "coordinates": [177.4, 447.5, 96.8, 28.6]},
+    {"evidence_id": "healthcare-value", "text": "4.0%", "coordinates": [199.1, 480.1, 47.9, 29.3]},
+    {"evidence_id": "hospitality", "text": "Hospitality", "coordinates": [605.3, 510.0, 99.8, 35.2]},
+    {"evidence_id": "hospitality-value", "text": "13.0%", "coordinates": [622.5, 542.6, 60.5, 33.2]},
+    {"evidence_id": "single-family", "text": "Single Family", "coordinates": [293.9, 562.5, 117.9, 33.9]},
+    {"evidence_id": "single-family-value", "text": "10.0%", "coordinates": [325.1, 593.8, 51.9, 33.2]},
+    {"evidence_id": "multifamily", "text": "Multifamily", "coordinates": [452.1, 685.5, 107.4, 35.9]},
+    {"evidence_id": "multifamily-value", "text": "35.0%", "coordinates": [472.8, 720.1, 61.5, 32.6]}
+  ]
+}

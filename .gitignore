@@ -1,0 +1,42 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+.venv/
+.venv-paddle/
+.venv-paddle-gpu/
+venv/
+.env
+.env.*
+
+runs/
+validation-reports/
+tmp/
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.zip
+
+# The only archive tracked is the public Census geography reference.
+!ocr_pipeline/assets/cb_2025_us_state_5m.zip
+
+# Local OM audits and development-only benchmark data are not part of the public package.
+COULTON_INDEPENDENT_RUN_REPORT.md
+COVERAGE_ACCURACY_AUDIT.md
+PADDLE_TABLE_INTEGRATION.md
+score_current_schema.py
+
+# Curated, intentionally published evidence runs live here.
+!examples/**/*.pdf
+!examples/**/*.png
+!examples/**/*.jpg
+!examples/**/*.jpeg
+
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dealsynq.local/schemas/pdf-page-inspection.schema.json",
+  "title": "DealSynq PDF Page Inspection",
+  "type": "object",
+  "required": ["schema_version", "document_id", "source_sha256", "page", "width_points", "height_points", "rotation", "regions", "warnings"],
+  "properties": {
+    "schema_version": {"const": "pdf-page-inspection/1.0"}, "document_id": {"type": "string"},
+    "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "page": {"type": "integer", "minimum": 1},
+    "width_points": {"type": "number", "exclusiveMinimum": 0}, "height_points": {"type": "number", "exclusiveMinimum": 0},
+    "rotation": {"type": "integer"}, "regions": {"type": "array", "items": {"type": "object"}}, "warnings": {"type": "array", "items": {"type": "string"}}
+  }
+}

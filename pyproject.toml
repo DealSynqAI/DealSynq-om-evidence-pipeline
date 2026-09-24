@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dealsynq-independent-vision-reconciled-pipeline"
+version = "0.1.0"
+description = "Independent full-page vision and OCR evidence reconciliation for Unified Source Blocks"
+requires-python = ">=3.11"
+dependencies = [
+  "pdfplumber>=0.11",
+  "pypdf>=5",
+  "Pillow>=10",
+  "jsonschema>=4.23",
+]
+
+[project.optional-dependencies]
+ocr = ["rapidocr>=3.9.2", "onnxruntime>=1.20", "opencv-python-headless>=4.10"]
+tables = ["paddleocr[doc-parser]>=3.3,<3.6", "paddlepaddle>=3.2.2,<3.3"]
+dev = ["pytest>=8"]
+validate = ["jsonschema>=4.23"]
+
+[project.scripts]
+dealsynq-ocr = "ocr_pipeline.cli:main"
+dealsynq-validate-source-blocks = "ocr_pipeline.validate_run:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ocr_pipeline*"]
+
+[tool.setuptools.package-data]
+ocr_pipeline = ["assets/*.zip"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
