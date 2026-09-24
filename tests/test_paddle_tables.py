@@ -1,6 +1,6 @@
 from ocr_pipeline.models import PageInspection, Region
 from ocr_pipeline.paddle_tables import apply_paddle_tables, html_rows, page_needs_table_analysis, table_candidates
-from ocr_pipeline.pipeline import _table_blocks
+from ocr_pipeline.pipeline import _ground_table_cells_from_ocr, _table_blocks
 from pathlib import Path
 import pytest
 
@@ -56,6 +56,40 @@ def test_html_cells_preserve_rows():
                          ["Total", ""], ["1", "2"]]
 
 
+def test_paddle_cell_boxes_disambiguate_repeated_values_by_row():
+    html = ("<table><tr><th>Item</th><th>Value</th></tr>"
+            "<tr><td>Asset A</td><td>$100</td></tr>"
+            "<tr><td>Asset B</td><td>$100</td></tr></table>")
+    boxes = [
+        [100, 100, 350, 150], [400, 100, 600, 150],
+        [100, 150, 350, 200], [400, 150, 600, 200],
+        [100, 200, 350, 250], [400, 200, 600, 250],
+    ]
+    candidate = table_candidates({"res": {
+        "layout_det_res": {"boxes": [{"label": "table", "score": 0.9,
+                                       "coordinate": [100, 100, 600, 250]}]},
+        "table_res_list": [{"pred_html": html, "cell_box_list": boxes}],
+    }}, 1000, 1000)[0]
+    assert candidate["cell_coordinates"][2][1] == [400.0, 200.0, 200.0, 50.0]
+    region = Region("p001-r001", 1, "table", candidate["coordinates"], 1,
+                    "PaddleOCR", 0.7, metadata={
+                        "rows_source": "paddle", "rows": candidate["rows"],
+                        "cell_coordinates": candidate["cell_coordinates"],
+                    })
+    lines = [
+        {"evidence_id": "label-a", "text": "Asset A", "coordinates": [120, 160, 90, 20]},
+        {"evidence_id": "value-a", "text": "$100", "coordinates": [430, 160, 65, 20]},
+        {"evidence_id": "label-b", "text": "Asset B", "coordinates": [120, 210, 90, 20]},
+        {"evidence_id": "value-b", "text": "$100", "coordinates": [430, 210, 65, 20]},
+    ]
+    block = _table_blocks("doc", "hash", region, lines, Path("page-001.png"))[0].as_dict()
+    stats = _ground_table_cells_from_ocr([block], lines)
+    assert stats["newly_grounded"] == 2
+    assert [row["cells"][0]["evidence_ids"] for row in block["content"]["rows"]] == [
+        ["value-a"], ["value-b"],
+    ]
+
+
 def test_value_first_paddle_list_keeps_first_fact():
     region = Region("p001-r001", 1, "table", [100, 100, 600, 400], 1,
                     "PaddleOCR", 0.65, metadata={
@@ -63,12 +97,19 @@ def test_value_first_paddle_list_keeps_first_fact():
                         "rows": [["6.3%", "Going-in Cap Rate"],
                                  ["$3.08", "In-Place Rent"],
                                  ["100%", "Occupancy"]],
+                        "cell_coordinates": [
+                            [[400, 100, 100, 30], [100, 100, 250, 30]],
+                            [[400, 140, 100, 30], [100, 140, 250, 30]],
+                            [[400, 180, 100, 30], [100, 180, 250, 30]],
+                        ],
                         "paddle_table_review": {"status": "candidate"},
                     })
     block = _table_blocks("doc", "hash", region, [], Path("page-001.png"))[0].as_dict()
     assert block["content"]["row_count"] == 3
     assert block["content"]["rows"][0]["label"] == "Going-in Cap Rate"
     assert block["content"]["rows"][0]["cells"][0]["raw_value"] == "6.3%"
+    assert block["content"]["rows"][0]["label_coordinates"] == [100, 100, 250, 30]
+    assert block["content"]["rows"][0]["cells"][0]["coordinates"] == [400, 100, 100, 30]
     assert block["validation"]["status"] == "needs_review"
 
 

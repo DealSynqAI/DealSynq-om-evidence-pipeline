@@ -15,6 +15,7 @@ from ocr_pipeline.inspection import (
     detect_vector_bar_chart,
     mark_repeated_decorations,
     merge_visual_objects,
+    _sparse_page_table,
     _merge_numeric_fragments,
     _mark_repeated_portrait_visuals,
     _group_words,
@@ -625,6 +626,21 @@ class PipelineUnitTests(unittest.TestCase):
         )
         self.assertEqual(len(merged), 2)
 
+    def test_page_wide_background_band_does_not_merge_with_chart(self) -> None:
+        merged = merge_visual_objects(
+            [(0, 190, 960, 410), (80, 130, 570, 475)], 960, 540,
+        )
+        self.assertEqual(len(merged), 2)
+
+    def test_sparse_page_frame_is_not_a_data_table(self) -> None:
+        sparse = [["Long page heading", None, None, None]] + [[None] * 4 for _ in range(7)]
+        sparse[3][1] = "A paragraph spanning the central panel"
+        self.assertTrue(_sparse_page_table((0, 0, 960, 540), sparse, 960, 540))
+        actual_grid = [["Property", "Price", "Year"]] + [
+            [f"Property {index}", f"${index * 100}", str(2020 + index)] for index in range(1, 8)
+        ]
+        self.assertFalse(_sparse_page_table((0, 0, 960, 540), actual_grid, 960, 540))
+
     def test_adjacent_visual_objects_merge(self) -> None:
         merged = merge_visual_objects(
             [(100, 100, 300, 300), (305, 120, 500, 310)], 1000, 1000,
@@ -977,6 +993,21 @@ class PipelineUnitTests(unittest.TestCase):
 
         self.assertEqual(owners["visual"], [])
         self.assertEqual([item["evidence_id"] for item in owners["text"]], ["e1"])
+
+    def test_broad_table_box_does_not_steal_chart_label_without_cell_support(self) -> None:
+        line = {"evidence_id": "chart-label", "coordinates": [190, 310, 100, 20], "text": "$351 | 0 yrs"}
+        regions = [
+            Region("page-grid", 1, "table", [0, 0, 1000, 1000], 1, "pdf table finder", 0.92),
+            Region("chart", 1, "visual", [80, 180, 540, 700], 2, "PDF image", 0.72),
+        ]
+        decisions = []
+        owners = _exclusive_region_lines(regions, [line], decisions)
+        self.assertEqual([item["evidence_id"] for item in owners["chart"]], ["chart-label"])
+        self.assertEqual(owners["page-grid"], [])
+        self.assertEqual(decisions[0]["owner_region_id"], "chart")
+        regions[0].metadata["cell_coordinates"] = [[[180, 300, 200, 50]]]
+        owners = _exclusive_region_lines(regions, [line])
+        self.assertEqual([item["evidence_id"] for item in owners["page-grid"]], ["chart-label"])
 
     def test_two_column_text_is_not_interleaved(self) -> None:
         words = []

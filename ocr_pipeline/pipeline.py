@@ -170,6 +170,7 @@ def _contains(coordinates: list[float], line: dict[str, Any]) -> bool:
 
 def _exclusive_region_lines(
     regions: list[Region], page_lines: list[dict[str, Any]],
+    decisions: list[dict[str, Any]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Assign every OCR line to at most one logical region.
 
@@ -177,10 +178,34 @@ def _exclusive_region_lines(
     A single evidence item must not silently support multiple root blocks.
     """
     result = {region.region_id: [] for region in regions}
-    # A real visual object owns the text drawn inside it (chart labels, values,
-    # map annotations, and similar overlays). Decoration remains lower than
-    # normal text so a background image cannot steal prose evidence.
-    priority = {"table": 6, "visual": 5, "normal_text": 4, "unknown": 2, "decoration": 1}
+    # Strong cell geometry beats a nearby chart; a broad PDF table finder box
+    # without cell geometry does not beat the chart solely because it is called
+    # a table. Decoration stays below native text.
+    priority = {"table": 6.0, "visual": 5.0, "normal_text": 4.0,
+                "unknown": 2.0, "decoration": 1.0}
+
+    def cell_boxes(value: Any) -> list[list[float]]:
+        if isinstance(value, (list, tuple)):
+            if len(value) == 4 and all(isinstance(item, (int, float)) for item in value):
+                return [list(value)]
+            return [box for nested in value for box in cell_boxes(nested)]
+        return []
+
+    def score(region: Region, line: dict[str, Any]) -> float:
+        area = region.coordinates[2] * region.coordinates[3] / 1_000_000
+        value = priority.get(region.kind, 2.0)
+        if region.kind == "table":
+            cells = cell_boxes(region.metadata.get("cell_coordinates"))
+            if cells and any(_contains(box, line) for box in cells):
+                value += 2.0
+            elif area >= 0.60 and not cells:
+                value -= 2.5
+        elif region.kind == "visual":
+            members = cell_boxes(region.metadata.get("member_coordinates"))
+            if members and any(_contains(box, line) for box in members):
+                value += 0.5
+        return value
+
     for line in page_lines:
         candidates = [
             region for region in regions
@@ -188,14 +213,27 @@ def _exclusive_region_lines(
         ]
         if not candidates:
             continue
-        owner = max(
-            candidates,
-            key=lambda region: (
-                priority.get(region.kind, 2),
-                -region.coordinates[2] * region.coordinates[3],
-                region.confidence,
-            ),
-        )
+        ranked = sorted(candidates, key=lambda region: (
+            -score(region, line),
+            region.coordinates[2] * region.coordinates[3],
+            -region.confidence, region.region_id,
+        ))
+        owner = ranked[0]
+        if len(ranked) > 1:
+            margin = score(ranked[0], line) - score(ranked[1], line)
+            ambiguous = margin < 0.25 and ranked[0].kind != ranked[1].kind
+            if decisions is not None:
+                decisions.append({
+                    "evidence_id": line["evidence_id"],
+                    "owner_region_id": None if ambiguous else owner.region_id,
+                    "ambiguous": ambiguous,
+                    "candidates": [
+                        {"region_id": region.region_id, "kind": region.kind,
+                         "score": score(region, line)} for region in ranked
+                    ],
+                })
+            if ambiguous:
+                continue
         result[owner.region_id].append(line)
     return result
 
@@ -1357,6 +1395,8 @@ def _table_blocks(
                 and second_numeric <= len(rows) // 3
                 and second_labels >= math.ceil(0.7 * len(rows))):
             rows = [[row[1], row[0]] for row in rows]
+            if cell_coordinates:
+                cell_coordinates = [[row[1], row[0]] for row in cell_coordinates]
             paddle_value_first = True
     # A two-column label/value list often has no printed header. Preserve its
     # first observation instead of silently treating it as column names.
@@ -1369,6 +1409,8 @@ def _table_blocks(
                 and bool(NUMBER.search(first_value))
                 and (paddle_value_first or value_count >= len(rows) - 1)):
             rows.insert(0, ["Field", "Value"])
+            if cell_coordinates:
+                cell_coordinates = [[None, None], *cell_coordinates]
             inferred_key_value_header = True
     # OCR commonly places a spanning title before the actual column header.
     # Promote the next row only when it looks like a set of printed labels.
@@ -2084,6 +2126,12 @@ def _ground_table_cells_from_ocr(
     def center(box: list[float]) -> tuple[float, float]:
         return box[0] + box[2] / 2, box[1] + box[3] / 2
 
+    def inside(line: dict[str, Any], box: list[float] | None) -> bool:
+        if not box or len(box) != 4:
+            return True
+        x, y = center(line["coordinates"])
+        return box[0] - 5 <= x <= box[0] + box[2] + 5 and box[1] - 5 <= y <= box[1] + box[3] + 5
+
     by_id = {str(line.get("evidence_id")): line for line in lines}
     stats = {"newly_grounded": 0, "still_unverified": 0}
     for block in blocks:
@@ -2100,7 +2148,9 @@ def _ground_table_cells_from_ocr(
         headers: dict[str, dict[str, Any]] = {}
         if len(columns) > 2:
             for column in columns[1:]:
-                matches = [line for line in owned if key(line.get("text")) == key(column.get("label"))]
+                matches = [line for line in owned
+                           if key(line.get("text")) == key(column.get("label"))
+                           and inside(line, column.get("coordinates"))]
                 if len(matches) == 1:
                     headers[column["column_id"]] = matches[0]
                     column["evidence_ids"] = [matches[0]["evidence_id"]]
@@ -2108,7 +2158,8 @@ def _ground_table_cells_from_ocr(
         used_values: set[str] = set()
         for row in rows:
             label_matches = [line for line in owned
-                             if key(row.get("label")) and key(line.get("text")) == key(row.get("label"))]
+                             if key(row.get("label")) and key(line.get("text")) == key(row.get("label"))
+                             and inside(line, row.get("label_coordinates"))]
             if len(label_matches) != 1:
                 continue
             label_line = label_matches[0]
@@ -2123,12 +2174,13 @@ def _ground_table_cells_from_ocr(
                 value_matches = [line for line in owned
                                  if line["evidence_id"] not in used_values
                                  and key(line.get("text")) == key(cell.get("raw_value"))
-                                 and key(cell.get("raw_value"))]
+                                 and key(cell.get("raw_value"))
+                                 and inside(line, cell.get("coordinates"))]
                 plausible = []
                 for line in value_matches:
                     value_x, value_y = center(line["coordinates"])
                     tolerance = max(20.0, (label_line["coordinates"][3] + line["coordinates"][3]) / 2 + 12)
-                    if abs(value_y - label_y) > tolerance:
+                    if not cell.get("coordinates") and abs(value_y - label_y) > tolerance:
                         continue
                     if len(columns) == 2:
                         if value_x <= label_x + 5:
@@ -4025,7 +4077,9 @@ def _route_and_extract_page(
     blocks: list[SourceBlock] = []
     assigned: set[str] = set()
     route_errors: list[str] = []
-    lines_by_region = _exclusive_region_lines(inspection.regions, page_lines)
+    ownership_decisions: list[dict[str, Any]] = []
+    lines_by_region = _exclusive_region_lines(inspection.regions, page_lines, ownership_decisions)
+    ocr_page["region_ownership_decisions"] = ownership_decisions
     absorbed_regions = _absorb_structured_visual_text(inspection, lines_by_region, vision_plan)
     absorbed_regions.update(_claim_single_value_cards(inspection.regions, page_lines, lines_by_region))
     visual_footnotes = _separate_visual_footnotes(inspection, lines_by_region)
@@ -4693,6 +4747,7 @@ def run_pipeline(
             reconciliation["raw_ocr_capture"] = raw_capture
             reconciliation["source_observation_capture"] = source_capture
             reconciliation["table_grounding"] = table_grounding
+            reconciliation["region_ownership_decisions"] = ocr_page.get("region_ownership_decisions", [])
             _write_json(reconciliation_dir / f"page-{inspection.page:03d}.json", reconciliation)
             reconciliation_counts.update(reconciliation["counts"])
             if inspection.page not in plans:
