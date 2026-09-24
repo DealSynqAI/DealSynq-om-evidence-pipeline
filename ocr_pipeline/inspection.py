@@ -494,6 +494,31 @@ def _sparse_page_table(
     return density < 0.30 and paired_rows / len(rows) < 0.40
 
 
+def _partition_words_at_filled_bands(
+    words: list[dict[str, Any]], rectangles: list[dict[str, Any]],
+    page_width: float, page_height: float,
+) -> list[list[dict[str, Any]]]:
+    """Keep text across wide filled bands in separate physical regions."""
+    separators = sorted({
+        float(rectangle["top"])
+        for rectangle in rectangles
+        if rectangle.get("fill") is True
+        and rectangle.get("non_stroking_color") is not None
+        and float(rectangle.get("x1", 0)) - float(rectangle.get("x0", 0)) >= page_width * 0.75
+        and page_height * 0.015 <= float(rectangle.get("bottom", 0)) - float(rectangle.get("top", 0))
+        <= page_height * 0.15
+        and 0 < float(rectangle.get("top", 0)) < page_height
+    })
+    if not separators:
+        return [words]
+    groups: list[list[dict[str, Any]]] = [[] for _ in range(len(separators) + 1)]
+    for word in words:
+        center_y = (float(word["top"]) + float(word["bottom"])) / 2
+        index = sum(center_y >= separator for separator in separators)
+        groups[index].append(word)
+    return [group for group in groups if group]
+
+
 def merge_visual_objects(
     images: list[tuple[float, float, float, float]], page_width: float, page_height: float,
 ) -> list[dict[str, Any]]:
@@ -1055,23 +1080,26 @@ def inspect_pdf(pdf_path: Path) -> tuple[list[PageInspection], dict[str, Any]]:
             words = [word for word in words if not any(_center_in(
                 (float(word["x0"]), float(word["top"]), float(word["x1"]), float(word["bottom"])), bbox
             ) for bbox in excluded)]
-            for paragraph in _group_words(words):
-                order += 1
-                regions.append(Region(
-                    region_id=f"p{page_number:03d}-r{order:03d}", page=page_number,
-                    kind="normal_text", coordinates=_normalized_xywh(paragraph["bbox"], width, height),
-                    reading_order=order, classification_method="native-positioned-words",
-                    confidence=quality, native_text=paragraph["text"],
-                    metadata={
-                        "median_font_size": paragraph["median_font_size"],
-                        "word_count": paragraph["word_count"],
-                        "source_bbox_points": list(paragraph["bbox"]),
-                        **({"reading_lane": paragraph["reading_lane"]}
-                           if paragraph.get("reading_lane") else {}),
-                        **({"column_gutter_points": paragraph["column_gutter_points"]}
-                           if paragraph.get("column_gutter_points") else {}),
-                    },
-                ))
+            for physical_words in _partition_words_at_filled_bands(
+                words, list(page.rects or []), width, height,
+            ):
+                for paragraph in _group_words(physical_words):
+                    order += 1
+                    regions.append(Region(
+                        region_id=f"p{page_number:03d}-r{order:03d}", page=page_number,
+                        kind="normal_text", coordinates=_normalized_xywh(paragraph["bbox"], width, height),
+                        reading_order=order, classification_method="native-positioned-words",
+                        confidence=quality, native_text=paragraph["text"],
+                        metadata={
+                            "median_font_size": paragraph["median_font_size"],
+                            "word_count": paragraph["word_count"],
+                            "source_bbox_points": list(paragraph["bbox"]),
+                            **({"reading_lane": paragraph["reading_lane"]}
+                               if paragraph.get("reading_lane") else {}),
+                            **({"column_gutter_points": paragraph["column_gutter_points"]}
+                               if paragraph.get("column_gutter_points") else {}),
+                        },
+                    ))
 
             if not regions:
                 regions.append(Region(

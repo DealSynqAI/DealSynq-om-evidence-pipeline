@@ -248,6 +248,42 @@ def test_raw_capture_creates_evidence_backed_text_block_for_unowned_line() -> No
     assert not list(Draft202012Validator(schema).iter_errors(blocks[0]))
 
 
+def test_raw_capture_groups_adjacent_lines_without_crossing_columns() -> None:
+    source_hash = "0" * 64
+    inspection = PageInspection(
+        page=1, width_points=600, height_points=800, rotation=0,
+        native_text_available=False, native_text_coverage=0, native_text_quality=0,
+        image_coverage=1, vector_line_count=0, possible_table_regions=0,
+        possible_visual_regions=0, routing_confidence=0.5, regions=[],
+    )
+    lines = [
+        {"evidence_id": "p001-ocr-0001", "text": "123M+", "confidence": 0.99,
+         "coordinates": [750, 200, 80, 20]},
+        {"evidence_id": "p001-ocr-0002", "text": "Projects under", "confidence": 0.99,
+         "coordinates": [730, 230, 120, 20]},
+        {"evidence_id": "p001-ocr-0003", "text": "management", "confidence": 0.99,
+         "coordinates": [735, 260, 110, 20]},
+        {"evidence_id": "p001-ocr-0004", "text": "Separate column", "confidence": 0.99,
+         "coordinates": [100, 230, 150, 20]},
+        {"evidence_id": "p001-native-0001", "text": "under", "confidence": 1.0,
+         "evidence_source": "native_pdf_positioned_word",
+         "coordinates": [815, 232, 34, 16]},
+    ]
+    blocks, stats = _preserve_ocr_lines_in_blocks(
+        [], lines, "doc", source_hash, inspection, Path("page-001.png"),
+    )
+    assert len(blocks) == 2
+    assert stats["fallback_text_blocks"] == 2
+    grouped = next(block for block in blocks if "123M+" in block["content"]["text"])
+    assert grouped["content"]["text"] == "123M+ Projects under management"
+    assert set(grouped["provenance"]["ocr_evidence_ids"]) == {
+        "p001-ocr-0001", "p001-ocr-0002", "p001-ocr-0003", "p001-native-0001",
+    }
+    assert {line["evidence_id"] for line in grouped["raw_evidence_lines"]} == {
+        "p001-ocr-0001", "p001-ocr-0002", "p001-ocr-0003", "p001-native-0001",
+    }
+
+
 def test_raw_capture_propagates_review_to_parent_group() -> None:
     source_hash = "0" * 64
     inspection = PageInspection(

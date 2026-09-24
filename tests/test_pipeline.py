@@ -16,6 +16,7 @@ from ocr_pipeline.inspection import (
     mark_repeated_decorations,
     merge_visual_objects,
     _sparse_page_table,
+    _partition_words_at_filled_bands,
     _merge_numeric_fragments,
     _mark_repeated_portrait_visuals,
     _group_words,
@@ -38,6 +39,8 @@ from ocr_pipeline.pipeline import (
     _table_blocks,
     _exclusive_region_lines,
     _hybrid_text,
+    _merge_owned_native_word_insertions,
+    _append_distinct_ocr_identifiers,
     _ocr_text,
     _kpi_bindings,
     _map_data_value_lines,
@@ -314,6 +317,23 @@ class PipelineUnitTests(unittest.TestCase):
             {"evidence_id": "e", "text": "Body line two", "coordinates": [100, 247, 500, 16]},
         ]
         self.assertEqual([len(group) for group in _split_visual_text_lines(lines)], [2, 1, 2])
+
+    def test_image_backed_text_keeps_parallel_columns_separate(self) -> None:
+        lines = [
+            {"evidence_id": f"left-{i}", "text": f"Left line {i}",
+             "coordinates": [110, 300 + i * 25, 330, 22]}
+            for i in range(4)
+        ] + [
+            {"evidence_id": f"right-{i}", "text": f"Right line {i}",
+             "coordinates": [550, 300 + i * 25, 330, 22]}
+            for i in range(4)
+        ]
+        groups = _split_visual_text_lines(lines)
+        self.assertEqual(len(groups), 2)
+        self.assertEqual([[line["evidence_id"] for line in group] for group in groups], [
+            [f"left-{i}" for i in range(4)],
+            [f"right-{i}" for i in range(4)],
+        ])
 
     def test_private_use_symbol_font_markers_become_list_structure(self) -> None:
         structure = _text_structure(
@@ -647,6 +667,19 @@ class PipelineUnitTests(unittest.TestCase):
             scattered_panels[index][8] = "Unrelated text"
         self.assertTrue(_sparse_page_table((0, 0, 960, 540), scattered_panels, 960, 540))
 
+    def test_filled_page_band_separates_adjacent_paragraphs(self) -> None:
+        words = [
+            {"text": "biography", "top": 710, "bottom": 725},
+            {"text": "footer", "top": 740, "bottom": 755},
+        ]
+        band = [{"x0": 0, "x1": 600, "top": 730, "bottom": 760,
+                 "fill": True, "non_stroking_color": (1.0, 0.8, 0.2)}]
+        self.assertEqual(
+            [[word["text"] for word in group] for group in
+             _partition_words_at_filled_bands(words, band, 600, 800)],
+            [["biography"], ["footer"]],
+        )
+
     def test_native_words_inside_short_ocr_phrase_render_once(self) -> None:
         lines = [
             {"evidence_id": "p001-ocr-0001", "text": "North Harbor", "coordinates": [100, 100, 120, 20]},
@@ -655,6 +688,36 @@ class PipelineUnitTests(unittest.TestCase):
             {"evidence_id": "p001-native-0003", "text": "Marina", "coordinates": [300, 100, 60, 20]},
         ]
         self.assertEqual(_ocr_text(lines), "North Harbor\nMarina")
+
+    def test_native_symbol_inside_ocr_phrase_renders_once(self) -> None:
+        lines = [
+            {"evidence_id": "p001-ocr-0001", "text": "North Harbor & Co",
+             "coordinates": [100, 100, 200, 20]},
+            {"evidence_id": "p001-native-0001", "text": "&",
+             "coordinates": [230, 102, 15, 16]},
+        ]
+        self.assertEqual(_ocr_text(lines), "North Harbor & Co")
+
+    def test_native_transcript_inserts_only_owned_printed_ocr_words(self) -> None:
+        native = "The team offers a quality service. Visit example.com."
+        ocr = "The team offers a full quality service. Visit example.com."
+        supported = [{"text": "full", "evidence_source": "native_pdf_positioned_word"}]
+        self.assertEqual(
+            _merge_owned_native_word_insertions(native, ocr, supported),
+            "The team offers a full quality service. Visit example.com.",
+        )
+        self.assertEqual(_merge_owned_native_word_insertions(native, ocr, []), native)
+
+    def test_distinct_ocr_website_is_retained_beside_email(self) -> None:
+        raw = "Contact: agent@example.com"
+        lines = [
+            {"evidence_id": "p001-ocr-0001", "text": "example.com", "confidence": 0.99,
+             "coordinates": [100, 100, 90, 16]},
+            {"evidence_id": "p001-ocr-0002", "text": "agent@example.com", "confidence": 0.99,
+             "coordinates": [100, 120, 150, 16]},
+        ]
+        self.assertEqual(_append_distinct_ocr_identifiers(raw, lines),
+                         "Contact: agent@example.com\nexample.com")
 
     def test_adjacent_visual_objects_merge(self) -> None:
         merged = merge_visual_objects(
@@ -1004,6 +1067,102 @@ class PipelineUnitTests(unittest.TestCase):
         owners = _exclusive_region_lines(regions, [line])
         self.assertEqual(owners["visual"], [])
         self.assertEqual([item["evidence_id"] for item in owners["text"]], ["e1"])
+
+    def test_native_word_outside_visual_ocr_lane_remains_unassigned(self) -> None:
+        regions = [Region(
+            "visual", 1, "visual", [400, 100, 600, 800], 1, "test", 0.8,
+            metadata={"member_coordinates": [[650, 150, 350, 750]]},
+        )]
+        lines = [
+            {"evidence_id": f"p001-ocr-{index:04d}", "text": f"Sidebar line {index}",
+             "coordinates": [760, 200 + index * 30, 170, 20]}
+            for index in range(1, 5)
+        ]
+        lines.extend([
+            {"evidence_id": "p001-native-0001", "evidence_source": "native_pdf_positioned_word",
+             "text": "Neighbor", "coordinates": [600, 380, 75, 18]},
+            {"evidence_id": "p001-native-0002", "evidence_source": "native_pdf_positioned_word",
+             "text": "Sidebar", "coordinates": [765, 380, 75, 18]},
+            {"evidence_id": "p001-native-0003", "evidence_source": "native_pdf_positioned_word",
+             "text": "Above", "coordinates": [765, 115, 75, 18]},
+        ])
+        owners = _exclusive_region_lines(regions, lines)
+        self.assertNotIn("p001-native-0001", [line["evidence_id"] for line in owners["visual"]])
+        self.assertNotIn("p001-native-0003", [line["evidence_id"] for line in owners["visual"]])
+        self.assertIn("p001-native-0002", [line["evidence_id"] for line in owners["visual"]])
+
+    def test_native_word_outside_visual_lane_joins_unique_adjacent_text(self) -> None:
+        regions = [
+            Region("visual", 1, "visual", [400, 100, 600, 800], 1, "test", 0.8,
+                   metadata={"member_coordinates": [[650, 100, 350, 800]]}),
+            Region("text", 1, "normal_text", [350, 300, 300, 150], 2, "test", 0.9),
+        ]
+        lines = [
+            {"evidence_id": f"p001-ocr-{index:04d}", "text": f"Sidebar line {index}",
+             "coordinates": [760, 200 + index * 30, 170, 20]}
+            for index in range(1, 5)
+        ]
+        lines.append({"evidence_id": "p001-native-0001",
+                      "evidence_source": "native_pdf_positioned_word", "text": "paragraph",
+                      "coordinates": [651, 380, 75, 18]})
+        owners = _exclusive_region_lines(regions, lines)
+        self.assertEqual([line["evidence_id"] for line in owners["text"]], ["p001-native-0001"])
+
+    def test_ocr_line_crossing_visual_margin_does_not_join_visual(self) -> None:
+        regions = [Region(
+            "visual", 1, "visual", [400, 100, 600, 800], 1, "test", 0.8,
+            metadata={"member_coordinates": [[650, 100, 350, 800]]},
+        )]
+        lines = [
+            {"evidence_id": f"p001-ocr-{index:04d}", "text": f"Inside line {index}",
+             "coordinates": [760, 200 + index * 30, 170, 20]}
+            for index in range(1, 5)
+        ]
+        lines.append({"evidence_id": "p001-ocr-0100", "text": "Adjacent footer text",
+                      "coordinates": [540, 870, 285, 20]})
+        owners = _exclusive_region_lines(regions, lines)
+        self.assertNotIn("p001-ocr-0100", [line["evidence_id"] for line in owners["visual"]])
+
+    def test_text_at_physical_image_edge_stays_with_visual_region(self) -> None:
+        regions = [Region(
+            "visual", 1, "visual", [0, 350, 1000, 400], 1, "test", 0.8,
+            metadata={"member_coordinates": [[0, 350, 1000, 400]]},
+        )]
+        lines = [
+            {"evidence_id": f"p001-ocr-{index:04d}", "text": f"Body line {index}",
+             "coordinates": [120, 390 + index * 25, 300, 20]}
+            for index in range(4)
+        ]
+        lines.append({"evidence_id": "p001-ocr-0100", "text": "Start of paragraph",
+                      "coordinates": [120, 335, 300, 30]})
+        owners = _exclusive_region_lines(regions, lines)
+        self.assertIn("p001-ocr-0100", [line["evidence_id"] for line in owners["visual"]])
+
+    def test_text_region_beats_image_at_shared_edge(self) -> None:
+        regions = [
+            Region("visual", 1, "visual", [0, 350, 1000, 400], 1, "test", 0.8,
+                   metadata={"member_coordinates": [[0, 350, 1000, 400]]}),
+            Region("text", 1, "normal_text", [500, 735, 390, 40], 2, "test", 0.9),
+        ]
+        lines = [
+            {"evidence_id": f"p001-ocr-{index:04d}", "text": f"Body line {index}",
+             "coordinates": [120, 390 + index * 25, 300, 20]}
+            for index in range(4)
+        ]
+        edge = {"evidence_id": "p001-ocr-0100", "text": "Next section title",
+                "coordinates": [525, 735, 350, 30]}
+        owners = _exclusive_region_lines(regions, [*lines, edge])
+        self.assertEqual([line["evidence_id"] for line in owners["text"]], [edge["evidence_id"]])
+
+    def test_chart_labels_can_extend_beyond_image_member(self) -> None:
+        regions = [Region(
+            "chart", 1, "visual", [100, 100, 700, 600], 1, "test", 0.8,
+            metadata={"chart_type_hint": "bar", "member_coordinates": [[200, 200, 500, 400]]},
+        )]
+        label = {"evidence_id": "p001-ocr-0001", "text": "Axis label",
+                 "coordinates": [110, 300, 90, 20]}
+        owners = _exclusive_region_lines(regions, [label])
+        self.assertEqual([line["evidence_id"] for line in owners["chart"]], ["p001-ocr-0001"])
 
     def test_visual_search_crop_does_not_steal_text_outside_ownership_box(self) -> None:
         regions = [
