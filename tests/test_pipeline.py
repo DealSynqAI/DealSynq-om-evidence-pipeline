@@ -649,12 +649,12 @@ class PipelineUnitTests(unittest.TestCase):
 
     def test_native_words_inside_short_ocr_phrase_render_once(self) -> None:
         lines = [
-            {"evidence_id": "p001-ocr-0001", "text": "White Stone", "coordinates": [100, 100, 120, 20]},
-            {"evidence_id": "p001-native-0001", "text": "White", "coordinates": [102, 102, 50, 16]},
-            {"evidence_id": "p001-native-0002", "text": "Stone", "coordinates": [156, 102, 55, 16]},
+            {"evidence_id": "p001-ocr-0001", "text": "North Harbor", "coordinates": [100, 100, 120, 20]},
+            {"evidence_id": "p001-native-0001", "text": "North", "coordinates": [102, 102, 50, 16]},
+            {"evidence_id": "p001-native-0002", "text": "Harbor", "coordinates": [156, 102, 55, 16]},
             {"evidence_id": "p001-native-0003", "text": "Marina", "coordinates": [300, 100, 60, 20]},
         ]
-        self.assertEqual(_ocr_text(lines), "White Stone\nMarina")
+        self.assertEqual(_ocr_text(lines), "North Harbor\nMarina")
 
     def test_adjacent_visual_objects_merge(self) -> None:
         merged = merge_visual_objects(
