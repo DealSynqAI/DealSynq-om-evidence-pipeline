@@ -1657,6 +1657,124 @@ def _recover_vision_photo_regions(
     return recovered
 
 
+def _apply_region_decomposition(
+    document_id: str, source_hash: str, inspection: PageInspection, image: Path, pdf: Path,
+    lines: list[dict[str, Any]], plan: dict[str, Any] | None,
+    blocks: list[dict[str, Any]], crops: Path, diagnostics: Path,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Replace a broad owner only after distinct regions have independent support."""
+    from .region_decomposition import empty_table_artifacts, propose_regions, select_regions
+
+    def _box_intersection(left: list[float], right: list[float]) -> float:
+        return (max(0, min(left[0] + left[2], right[0] + right[2]) - max(left[0], right[0]))
+                * max(0, min(left[1] + left[3], right[1] + right[3]) - max(left[1], right[1])))
+
+    proposals = propose_regions(image, inspection, lines, plan, pdf)
+    broad = [block for block in blocks
+             if block["coordinates"][2] * block["coordinates"][3] >= 450_000
+             and block["type"] in {"map", "unclassified_visual", "text"}]
+    chosen = select_regions(proposals, lines, blocks)
+    rapid = [line for line in lines if "-ocr-" in str(line.get("evidence_id", ""))]
+    covered = {key for item in chosen for key in item["ocr_evidence_ids"]}
+    other_owned = {key for block in blocks if block not in broad
+                   for key in block.get("provenance", {}).get("ocr_evidence_ids", [])}
+    coverage = (len((covered | other_owned) & {line["evidence_id"] for line in rapid})
+                / max(1, len(rapid)))
+    visual_supported = any(item["kind"] in {"photograph", "map"} for item in chosen)
+    card_supported = sum(item["kind"] == "tenant_card" for item in chosen) >= 2
+    decompose = bool(broad and len(chosen) >= 2 and coverage >= 0.85
+                     and (visual_supported or card_supported))
+    # On a page without a broad visual owner, a PDF image member can still
+    # reveal a missing photograph. It may not claim existing OCR text.
+    additive = [item for item in chosen if item["kind"] == "photograph"
+                and item["origin"] == "pdf_image_member"
+                and len(item["ocr_evidence_ids"]) <= 2]
+    active = chosen if decompose else additive if not broad else []
+    # A broad fallback text box can hide an independently bounded PDF photo.
+    # Preserve its transcript in the photo as unresolved raw evidence.
+    photo_replacement = next((item for item in additive
+                              if any(block["type"] == "text"
+                                     and not block["provenance"]["ocr_evidence_ids"]
+                                     and _box_intersection(item["coordinates"], block["coordinates"])
+                                     / max(1, block["coordinates"][2] * block["coordinates"][3]) >= 0.7
+                                     for block in broad)), None)
+    if broad and not decompose and photo_replacement:
+        active = [photo_replacement]
+    replaced = (broad if decompose else [block for block in broad
+                if photo_replacement and block["type"] == "text"
+                and not block["provenance"]["ocr_evidence_ids"]])
+    photo_boxes = [item["coordinates"] for item in active if item["kind"] == "photograph"]
+    blank_overlays = empty_table_artifacts(blocks, photo_boxes)
+    receipt = {"page": inspection.page, "proposals": proposals,
+               "selected": [{key: value for key, value in item.items() if key != "ocr_evidence_ids"}
+                            for item in active],
+               "rapidocr_line_coverage": round(coverage, 4),
+               "broad_owner_replaced": [block["block_id"] for block in replaced],
+               "empty_table_artifacts_removed": [block["block_id"] for block in blank_overlays],
+               "status": "decomposed" if decompose else "photo_recovered" if replaced
+                         else "additive_photo" if active else "retained_for_review"}
+    if not active:
+        return blocks, receipt
+    remaining = [block for block in blocks if block not in replaced and block not in blank_overlays]
+    by_id = {line["evidence_id"]: line for line in rapid}
+    existing = {block["block_id"] for block in remaining}
+    for index, item in enumerate(active, 1):
+        kind = item["kind"]
+        box = item["coordinates"]
+        item_lines = [by_id[key] for key in item["ocr_evidence_ids"] if key in by_id]
+        region = Region(
+            region_id=f"p{inspection.page:03d}-decomposed-{index:03d}",
+            page=inspection.page, kind="normal_text" if kind in {"text_panel", "tenant_card"} else "visual",
+            coordinates=box, reading_order=10_000 + index,
+            classification_method="independent OCR and pixel region decomposition",
+            confidence=0.72, metadata={"source_bbox_points": [
+                box[0] * inspection.width_points / 1000,
+                box[1] * inspection.height_points / 1000,
+                (box[0] + box[2]) * inspection.width_points / 1000,
+                (box[1] + box[3]) * inspection.height_points / 1000,
+            ]},
+        )
+        crop_path = crops / f"{region.region_id}.png"
+        _crop(image, box, crop_path)
+        if kind in {"text_panel", "tenant_card"}:
+            block = _text_block(document_id, source_hash, inspection, region, item_lines, image, 1.1)
+            block.semantic_role = "profile_biography" if kind == "tenant_card" else "text_panel"
+            block.content["region_image"] = f"region-images/{crop_path.name}"
+            block.validation_status = "needs_review"
+            block.warnings.append("region boundary inferred from OCR layout; inspect crop for omitted print")
+            new_blocks = [block]
+        elif kind == "table":
+            new_blocks = _table_blocks(document_id, source_hash, region, item_lines, image)
+            for block in new_blocks:
+                block.validation_status = "needs_review"
+                block.warnings.append("table inferred from OCR grid; cell ownership needs review")
+                block.content["region_image"] = f"region-images/{crop_path.name}"
+        else:
+            features = {"region_decomposition": item["support"], "boundary_origin": item["origin"]}
+            features_ref = _write_vision_diagnostic(
+                diagnostics, document_id, source_hash, region, features,
+            )
+            new_blocks = _visual_blocks(
+                document_id, source_hash, region, kind, 0.72,
+                ["region boundary supported by pixels and OCR; review physical extent"],
+                item_lines, features, image, crop_path, None, features_ref,
+            )
+        for block in new_blocks:
+            if block.block_id in existing:
+                raise ValueError(f"duplicate decomposed block: {block.block_id}")
+            existing.add(block.block_id)
+            payload = block.as_dict()
+            if photo_replacement and item is photo_replacement:
+                raw = "\n".join(str(old.get("content", {}).get("text", "")) for old in replaced).strip()
+                if raw:
+                    payload["raw_evidence_lines"] = [{"evidence_id": f"{region.region_id}-paddle-layout",
+                                                      "source": "paddle_layout_text", "text": raw,
+                                                      "confidence": 0.5, "coordinates": box}]
+                    payload["validation"]["status"] = "needs_review"
+            remaining.append(payload)
+    return remaining, receipt
+
+
 def _table_blocks(
     document_id: str, source_hash: str, region: Region, lines: list[dict[str, Any]], image: Path,
     qwen_payload: dict[str, Any] | None = None, qwen_error: str | None = None,
@@ -2443,6 +2561,16 @@ def _preserve_ocr_lines_in_blocks(
                 by_owner[evidence_id] = owner
                 stats["owner_recovered"] += 1
             else:
+                physical = [block for block in blocks
+                            if "-decomposed-" in block.get("block_id", "")
+                            and block.get("type") in {"text", "heading", "contact"}
+                            and near(block, line)]
+                if len(physical) == 1:
+                    owner = physical[0]
+                    owner["provenance"]["ocr_evidence_ids"].append(evidence_id)
+                    by_owner[evidence_id] = owner
+                    stats["owner_recovered"] += 1
+            if owner is None:
                 try:
                     coordinates = [float(value) for value in line.get("coordinates", [])]
                 except (TypeError, ValueError):
@@ -5006,6 +5134,7 @@ def run_pipeline(
             apply_paddle_tables, page_needs_table_analysis,
             screen_table_candidates_against_ocr, table_candidates,
         )
+        from .ocr_disagreement import needs_second_ocr, record_disagreements
         from .spatial_lanes import split_mixed_key_value_regions
 
         pre_paddle_inspections = {
@@ -5018,6 +5147,7 @@ def run_pipeline(
             for inspection in selected_inspections
             if page_needs_table_analysis(inspection, plans.get(inspection.page),
                                          ocr_for_tables.get(inspection.page, {"lines": []}))
+            or needs_second_ocr(ocr_for_tables.get(inspection.page, {"lines": []}))
         }
         if paddle_images:
             paddle_summary = run_paddle_table_worker(paddle_images, paddle_dir, paddle_python, paddle_device)
@@ -5029,10 +5159,12 @@ def run_pipeline(
             }
             _write_json(paddle_dir / "summary.json", paddle_summary)
         paddle_pages = {int(item["page"]): item for item in paddle_summary["pages"]}
+        paddle_payloads: dict[int, dict[str, Any]] = {}
         for page_inspection in selected_inspections:
             receipt = paddle_pages.get(page_inspection.page, {})
             if page_inspection.page in paddle_images and receipt.get("status") == "complete":
                 payload = json.loads(Path(receipt["result"]).read_text(encoding="utf-8"))
+                paddle_payloads[page_inspection.page] = payload
                 with Image.open(rendered[page_inspection.page]) as page_image:
                     width, height = page_image.size
                 candidates, rejected = screen_table_candidates_against_ocr(
@@ -5096,6 +5228,8 @@ def run_pipeline(
         page_records = []
         type_counts: Counter[str] = Counter()
         status_counts: Counter[str] = Counter()
+        decomposition_counts: Counter[str] = Counter()
+        disagreement_total = 0
         collection_errors: list[str] = []
         for inspection in selected_inspections:
             raw_ocr_page = ocr_by_page.get(inspection.page, {"lines": [], "regions": {}})
@@ -5192,6 +5326,10 @@ def run_pipeline(
                     document_id, source_hash, inspection, rendered[inspection.page],
                     ocr_page.get("lines", []), plan, blocks, crops_dir, diagnostics_dir,
                 ))
+            blocks, region_decomposition = _apply_region_decomposition(
+                document_id, source_hash, inspection, rendered[inspection.page], pdf,
+                ocr_page.get("lines", []), plan, blocks, crops_dir, diagnostics_dir,
+            )
             reconciliation = reconcile_page(
                 inspection.page, plan, blocks,
                 ocr_page.get("lines", []),
@@ -5216,6 +5354,14 @@ def run_pipeline(
                 document_id, source_hash, inspection, rendered[inspection.page],
             )
             table_grounding = _ground_table_cells_from_ocr(blocks, ocr_page.get("lines", []))
+            disagreement = record_disagreements(
+                inspection.page, rendered[inspection.page], ocr_page.get("lines", []),
+                paddle_payloads.get(inspection.page), blocks,
+                output / "disagreement-crops",
+                output / "diagnostics" / "ocr-disagreements" / f"page-{inspection.page:03d}.json",
+            )
+            decomposition_counts[region_decomposition["status"]] += 1
+            disagreement_total += disagreement["unresolved_count"]
             owned_ids = {
                 evidence_id for block in blocks
                 for evidence_id in block.get("provenance", {}).get("ocr_evidence_ids", [])
@@ -5226,6 +5372,8 @@ def run_pipeline(
             reconciliation["raw_ocr_capture"] = raw_capture
             reconciliation["source_observation_capture"] = source_capture
             reconciliation["table_grounding"] = table_grounding
+            reconciliation["ocr_disagreement"] = disagreement
+            reconciliation["region_decomposition"] = region_decomposition
             reconciliation["region_ownership_decisions"] = ocr_page.get("region_ownership_decisions", [])
             _write_json(reconciliation_dir / f"page-{inspection.page:03d}.json", reconciliation)
             reconciliation_counts.update(reconciliation["counts"])
@@ -5316,9 +5464,20 @@ def run_pipeline(
             "counts": dict(sorted(reconciliation_counts.items())),
             "policy": "image-only vision and native/OCR/OpenCV run independently; only uniquely printed, spatially owned pairs can correct a source block; uncertainty remains in review",
         })
+        manifest["region_decomposition"] = {
+            "page_status_counts": dict(sorted(decomposition_counts.items())),
+            "receipts": "reconciliation/page-NNN.json#region_decomposition",
+        }
+        manifest["ocr_disagreement"] = {
+            "unresolved_count": disagreement_total,
+            "receipts": "diagnostics/ocr-disagreements/page-NNN.json",
+            "crops": "disagreement-crops/",
+        }
         manifest["stages"].extend([
             {"name": "region-routing-and-extraction", "status": "complete", "finished_utc": _now()},
+            {"name": "evidence-gated-page-region-decomposition", "status": "complete", "finished_utc": _now()},
             {"name": "independent-claim-reconciliation", "status": "complete", "finished_utc": _now()},
+            {"name": "ocr-disagreement-preservation", "status": "complete", "finished_utc": _now()},
             {"name": "reconstruction-and-validation", "status": "complete", "finished_utc": _now()},
             {"name": "unified-source-block-collection", "status": "complete", "finished_utc": _now()},
         ])

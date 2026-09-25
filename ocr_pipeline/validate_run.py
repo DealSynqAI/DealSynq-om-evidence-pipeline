@@ -184,6 +184,23 @@ def validate_run(run: Path, schema_path: Path | None = None) -> dict[str, Any]:
             if block.get("document_id") != collection.get("document_id"):
                 integrity_errors.append(f"page {page_number}: {block.get('block_id')} has incorrect document_id")
             content = block.get("content", {})
+            region_image = content.get("region_image")
+            if region_image and not _resolve_run_path(run, region_image).is_file():
+                integrity_errors.append(f"page {page_number}: {block.get('block_id')} region crop is missing")
+            for disagreement in block.get("ocr_disagreements", []):
+                crop = _resolve_run_path(run, disagreement.get("crop"))
+                if not crop.is_file():
+                    integrity_errors.append(
+                        f"page {page_number}: {block.get('block_id')} OCR disagreement crop is missing"
+                    )
+                elif disagreement.get("crop_sha256") and _sha256(crop) != disagreement["crop_sha256"]:
+                    integrity_errors.append(
+                        f"page {page_number}: {block.get('block_id')} OCR disagreement crop hash mismatch"
+                    )
+                if block.get("validation", {}).get("status") == "passed":
+                    integrity_errors.append(
+                        f"page {page_number}: {block.get('block_id')} has unresolved OCR disagreement but passed"
+                    )
             if "vision_features" in content or "line_segments" in content:
                 integrity_errors.append(f"page {page_number}: {block.get('block_id')} embeds raw vision features")
             requires_visual_diagnostic = block.get("type") in {
