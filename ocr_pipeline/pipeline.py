@@ -18,7 +18,7 @@ import sys
 from typing import Any
 import unicodedata
 
-from PIL import Image
+from PIL import Image, ImageStat
 from pypdf import PdfReader
 
 from .comparison_layout import reconstruct_comparison_panel
@@ -170,6 +170,7 @@ def _contains(coordinates: list[float], line: dict[str, Any]) -> bool:
 
 def _exclusive_region_lines(
     regions: list[Region], page_lines: list[dict[str, Any]],
+    decisions: list[dict[str, Any]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Assign every OCR line to at most one logical region.
 
@@ -177,25 +178,165 @@ def _exclusive_region_lines(
     A single evidence item must not silently support multiple root blocks.
     """
     result = {region.region_id: [] for region in regions}
-    # A real visual object owns the text drawn inside it (chart labels, values,
-    # map annotations, and similar overlays). Decoration remains lower than
-    # normal text so a background image cannot steal prose evidence.
-    priority = {"table": 6, "visual": 5, "normal_text": 4, "unknown": 2, "decoration": 1}
+    # Strong cell geometry beats a nearby chart; a broad PDF table finder box
+    # without cell geometry does not beat the chart solely because it is called
+    # a table. Decoration stays below native text.
+    priority = {"table": 6.0, "visual": 5.0, "normal_text": 4.0,
+                "unknown": 2.0, "decoration": 1.0}
+
+    def cell_boxes(value: Any) -> list[list[float]]:
+        if isinstance(value, (list, tuple)):
+            if len(value) == 4 and all(isinstance(item, (int, float)) for item in value):
+                return [list(value)]
+            return [box for nested in value for box in cell_boxes(nested)]
+        return []
+
+    # A PDF image object can include a background extending into the next
+    # text column. When OCR independently finds a substantial text lane inside
+    # that image, evidence outside the physical member or far outside its text
+    # lane is available to another region or a raw evidence block.
+    def mostly_inside_member(line: dict[str, Any], members: list[list[float]]) -> bool:
+        x, y, width, height = line["coordinates"]
+        if width <= 0 or height <= 0:
+            return False
+        for mx, my, mw, mh in members:
+            overlap_width = max(0.0, min(x + width, mx + mw) - max(x, mx))
+            overlap_height = max(0.0, min(y + height, my + mh) - max(y, my))
+            if overlap_width / width >= 0.90 and overlap_height / height >= 0.90:
+                return True
+        return False
+
+    def near_member(line: dict[str, Any], members: list[list[float]]) -> bool:
+        """Keep printed edge labels with their image when the overlap is clear."""
+        if mostly_inside_member(line, members):
+            return True
+        x, y, width, height = line["coordinates"]
+        if width <= 0 or height <= 0:
+            return False
+        for mx, my, mw, mh in members:
+            overlap_width = max(0.0, min(x + width, mx + mw) - max(x, mx))
+            overlap_height = max(0.0, min(y + height, my + mh) - max(y, my))
+            overflow = max(mx - x, x + width - mx - mw,
+                           my - y, y + height - my - mh, 0.0)
+            if (overflow <= 20 and overlap_width / width >= 0.45
+                    and overlap_height / height >= 0.45):
+                return True
+        return False
+
+    visual_text_lanes: dict[str, tuple[float, float]] = {}
+    for region in regions:
+        if region.kind != "visual" or region.metadata.get("chart_type_hint"):
+            continue
+        members = cell_boxes(region.metadata.get("member_coordinates"))
+        if not members:
+            continue
+        supported = [line for line in page_lines
+                     if str(line.get("evidence_id", "")).startswith(f"p{region.page:03d}-ocr-")
+                     and mostly_inside_member(line, members)
+                     and len(str(line.get("text", "")).strip()) >= 3]
+        if len(supported) >= 4:
+            visual_text_lanes[region.region_id] = (
+                min(float(line["coordinates"][0]) for line in supported),
+                max(float(line["coordinates"][0]) + float(line["coordinates"][2])
+                    for line in supported),
+            )
+
+    def score(region: Region, line: dict[str, Any]) -> float:
+        area = region.coordinates[2] * region.coordinates[3] / 1_000_000
+        value = priority.get(region.kind, 2.0)
+        if region.kind == "table":
+            cells = cell_boxes(region.metadata.get("cell_coordinates"))
+            if cells and any(_contains(box, line) for box in cells):
+                value += 2.0
+            elif area >= 0.60 and not cells:
+                value -= 2.5
+        elif region.kind == "visual":
+            members = cell_boxes(region.metadata.get("member_coordinates"))
+            if members and mostly_inside_member(line, members):
+                value += 0.5
+            elif members:
+                # The visual's padded search box may overlap a neighboring
+                # paragraph. Prefer a genuine text region for words outside
+                # every physical image member when both claim the line.
+                value -= 1.5
+        return value
+
     for line in page_lines:
+        excluded_visual_lane = False
+        def eligible(region: Region) -> bool:
+            nonlocal excluded_visual_lane
+            owner_box = region.metadata.get("ownership_coordinates") or region.coordinates
+            near_visual_edge = (
+                region.region_id in visual_text_lanes
+                and near_member(line, cell_boxes(region.metadata.get("member_coordinates")))
+                and _contains([
+                    owner_box[0] - 20, owner_box[1] - 20,
+                    owner_box[2] + 40, owner_box[3] + 40,
+                ], line)
+            )
+            if not _contains(owner_box, line) and not near_visual_edge:
+                return False
+            if (
+                region.region_id in visual_text_lanes
+                and (
+                    (
+                        line.get("evidence_source") == "native_pdf_positioned_word"
+                        and (
+                            not near_member(
+                                line, cell_boxes(region.metadata.get("member_coordinates")),
+                            )
+                            or not (
+                                visual_text_lanes[region.region_id][0] - 25 <= _center(line["coordinates"])[0]
+                                <= visual_text_lanes[region.region_id][1] + 25
+                            )
+                        )
+                    ) or (
+                        str(line.get("evidence_id", "")).startswith(f"p{region.page:03d}-ocr-")
+                        and not near_member(
+                            line, cell_boxes(region.metadata.get("member_coordinates")),
+                        )
+                    )
+                )
+            ):
+                excluded_visual_lane = True
+                return False
+            return True
+
         candidates = [
-            region for region in regions
-            if _contains(region.metadata.get("ownership_coordinates") or region.coordinates, line)
+            region for region in regions if eligible(region)
         ]
+        if not candidates and excluded_visual_lane:
+            lx, ly, lw, lh = line["coordinates"]
+            cy = ly + lh / 2
+            nearby_text = [region for region in regions if region.kind == "normal_text"
+                           and region.coordinates[1] <= cy <= region.coordinates[1] + region.coordinates[3]
+                           and lx <= region.coordinates[0] + region.coordinates[2] + 30
+                           and lx + lw >= region.coordinates[0] - 30]
+            if len(nearby_text) == 1:
+                candidates = nearby_text
         if not candidates:
             continue
-        owner = max(
-            candidates,
-            key=lambda region: (
-                priority.get(region.kind, 2),
-                -region.coordinates[2] * region.coordinates[3],
-                region.confidence,
-            ),
-        )
+        ranked = sorted(candidates, key=lambda region: (
+            -score(region, line),
+            region.coordinates[2] * region.coordinates[3],
+            -region.confidence, region.region_id,
+        ))
+        owner = ranked[0]
+        if len(ranked) > 1:
+            margin = score(ranked[0], line) - score(ranked[1], line)
+            ambiguous = margin < 0.25 and ranked[0].kind != ranked[1].kind
+            if decisions is not None:
+                decisions.append({
+                    "evidence_id": line["evidence_id"],
+                    "owner_region_id": None if ambiguous else owner.region_id,
+                    "ambiguous": ambiguous,
+                    "candidates": [
+                        {"region_id": region.region_id, "kind": region.kind,
+                         "score": score(region, line)} for region in ranked
+                    ],
+                })
+            if ambiguous:
+                continue
         result[owner.region_id].append(line)
     return result
 
@@ -565,21 +706,26 @@ def _ocr_text(lines: list[dict[str, Any]]) -> str:
     # Image-backed PDF text may appear twice: RapidOCR contributes a full
     # phrase while positioned native words contribute each word separately.
     # Keep both in provenance, but render an overlapping word only once.
-    phrases = [line for line in lines if
-        "-native-" not in str(line.get("evidence_id", ""))
-        and len(str(line.get("text", ""))) >= 20]
-
     def tokens(value: str) -> list[str]:
         return re.findall(r"\w+", _fold_token(value))
 
+    phrases = [line for line in lines if
+        "-native-" not in str(line.get("evidence_id", ""))
+        and len(tokens(str(line.get("text", "")))) >= 2]
+
     def covered(native: dict[str, Any]) -> bool:
         needle = tokens(str(native.get("text", "")))
-        if not needle:
+        symbol = str(native.get("text", "")).strip()
+        if not needle and (len(symbol) != 1 or symbol.isalnum()):
             return False
         nx, ny = _center(native["coordinates"])
         for phrase in phrases:
             px, py, pw, ph = phrase["coordinates"]
             if not (px - 15 <= nx <= px + pw + 15 and py - 18 <= ny <= py + ph + 18):
+                continue
+            if not needle:
+                if symbol in str(phrase.get("text", "")):
+                    return True
                 continue
             words = tokens(str(phrase.get("text", "")))
             if any(words[start:start + len(needle)] == needle for start in range(len(words) - len(needle) + 1)):
@@ -622,6 +768,69 @@ def _hybrid_text(native: str, ocr: str) -> str:
         return by_folded[candidates[0]][0] if candidates else word
 
     return re.sub(r"[\w’'-]+", replace, ocr, flags=re.UNICODE)
+
+
+def _merge_owned_native_word_insertions(
+    native: str, ocr: str, lines: list[dict[str, Any]],
+) -> str:
+    """Fill native-text omissions only with OCR words also printed as owned PDF words."""
+    native_matches = list(re.finditer(r"\w+", native, re.UNICODE))
+    ocr_matches = list(re.finditer(r"\w+", ocr, re.UNICODE))
+    native_words = [_fold_token(match.group()) for match in native_matches]
+    ocr_words = [_fold_token(match.group()) for match in ocr_matches]
+    native_counts = Counter(native_words)
+    ocr_counts = Counter(ocr_words)
+    positioned = Counter(
+        _fold_token(word)
+        for line in lines if line.get("evidence_source") == "native_pdf_positioned_word"
+        for word in re.findall(r"\w+", str(line.get("text", "")), re.UNICODE)
+    )
+    inserted: Counter[str] = Counter()
+    edits: list[tuple[int, str]] = []
+    for op, i1, _i2, j1, j2 in difflib.SequenceMatcher(
+        None, native_words, ocr_words, autojunk=False,
+    ).get_opcodes():
+        if op != "insert" or not 1 <= j2 - j1 <= 4:
+            continue
+        words = ocr_words[j1:j2]
+        if not all(
+            positioned[word] >= inserted[word] + words.count(word)
+            and native_counts[word] + inserted[word] + words.count(word) <= ocr_counts[word]
+            for word in set(words)
+        ):
+            continue
+        insertion = " ".join(match.group() for match in ocr_matches[j1:j2])
+        offset = native_matches[i1].start() if i1 < len(native_matches) else len(native)
+        edits.append((offset, insertion))
+        inserted.update(words)
+    merged = native
+    for offset, insertion in sorted(edits, reverse=True):
+        merged = merged[:offset] + (insertion + " " if offset < len(merged) else " " + insertion) + merged[offset:]
+    return merged
+
+
+def _append_distinct_ocr_identifiers(
+    raw: str, lines: list[dict[str, Any]],
+) -> str:
+    """Retain separately printed OCR URLs or emails omitted by native PDF text."""
+    identifier = re.compile(r"(?:https?://)?(?:www\.)?(?:[\w-]+\.)+[A-Za-z]{2,}|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", re.I)
+    existing = {token.strip(".,;:()[]{}<>|").casefold()
+                for token in re.split(r"\s+", raw) if token.strip()}
+    additions: list[str] = []
+    for line in sorted(lines, key=lambda item: (
+        float(item["coordinates"][1]), float(item["coordinates"][0]),
+    )):
+        if "-ocr-" not in str(line.get("evidence_id", "")) or float(line.get("confidence", 0.0)) < 0.90:
+            continue
+        candidate = str(line.get("text", "")).strip(" \t\n|,;")
+        if not identifier.fullmatch(candidate):
+            continue
+        folded = candidate.casefold()
+        if folded in existing:
+            continue
+        additions.append(candidate)
+        existing.add(folded)
+    return raw + ("\n" + "\n".join(additions) if additions else "")
 
 
 def _text_structure(raw: str) -> dict[str, Any] | None:
@@ -718,7 +927,10 @@ def _classify_visual(region: Region, lines: list[dict[str, Any]], features: dict
     if numeric >= 2 and (repeated_marks or legend_marks or (plot_boundary and axis_pair and axis_ticks >= 3)):
         return "chart", 0.78, warnings
     prose_lines = sum(len(str(line.get("text", "")).split()) >= 4 for line in lines)
-    if len(lines) >= 10 and prose_lines >= 5 and numeric_density < 0.20 and printed_place_labels < 3:
+    if (len(lines) >= 10 and prose_lines >= max(8, math.ceil(0.55 * len(lines)))
+            and numeric_density < 0.60 and axis_ticks < 3
+            and table_grid_confidence < 0.30 and bars < 3
+            and printed_place_labels < 3):
         return "normal_text", 0.75, ["visual page has substantial OCR prose without a supported data plot"]
     if numeric >= 2 and (map_term_hits or chart_term_hits):
         warnings.append("semantic wording requires visual-model confirmation; no structural plot evidence found")
@@ -776,22 +988,53 @@ def _line_box(lines: list[dict[str, Any]]) -> list[float]:
 
 
 def _split_visual_text_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """Split image-backed text using vertical whitespace, independent of document wording."""
+    """Split image-backed text at clear column gutters and vertical whitespace."""
     if not lines:
         return []
-    ordered = sorted(lines, key=lambda line: (float(line["coordinates"][1]), float(line["coordinates"][0])))
-    heights = [max(1.0, float(line["coordinates"][3])) for line in ordered]
-    median_height = statistics.median(heights)
-    groups: list[list[dict[str, Any]]] = [[ordered[0]]]
-    previous_bottom = float(ordered[0]["coordinates"][1]) + float(ordered[0]["coordinates"][3])
-    for line in ordered[1:]:
-        top = float(line["coordinates"][1])
-        gap = top - previous_bottom
-        if gap > max(10.0, median_height * 0.72):
-            groups.append([line])
-        else:
-            groups[-1].append(line)
-        previous_bottom = max(previous_bottom, top + float(line["coordinates"][3]))
+
+    # A PDF may store an entire two-column page as one image. Vertical-only
+    # segmentation then joins two unrelated paragraphs on the same baseline.
+    # Require a substantial empty gutter across both OCR lines and native words.
+    meaningful = [line for line in lines if len(str(line.get("text", "")).strip()) >= 2]
+    columns: list[list[dict[str, Any]]] = [lines]
+    if len(meaningful) >= 6:
+        best: tuple[float, float] | None = None
+        for cut in range(300, 701, 10):
+            left = [line for line in meaningful if float(line["coordinates"][0])
+                    + float(line["coordinates"][2]) <= cut - 12]
+            right = [line for line in meaningful if float(line["coordinates"][0]) >= cut + 12]
+            crossing = len(meaningful) - len(left) - len(right)
+            if min(len(left), len(right)) < 3 or crossing > max(1, len(meaningful) // 20):
+                continue
+            score = min(len(left), len(right)) - abs(cut - 500) / 1000
+            if best is None or score > best[0]:
+                best = (score, float(cut))
+        if best is not None:
+            cut = best[1]
+            columns = [
+                [line for line in lines if _center(line["coordinates"])[0] < cut],
+                [line for line in lines if _center(line["coordinates"])[0] >= cut],
+            ]
+
+    groups: list[list[dict[str, Any]]] = []
+    for column in columns:
+        ordered = sorted(column, key=lambda line: (
+            float(line["coordinates"][1]), float(line["coordinates"][0]),
+        ))
+        if not ordered:
+            continue
+        heights = [max(1.0, float(line["coordinates"][3])) for line in ordered]
+        median_height = statistics.median(heights)
+        groups.append([ordered[0]])
+        previous_bottom = float(ordered[0]["coordinates"][1]) + float(ordered[0]["coordinates"][3])
+        for line in ordered[1:]:
+            top = float(line["coordinates"][1])
+            gap = top - previous_bottom
+            if gap > max(10.0, median_height * 0.72):
+                groups.append([line])
+            else:
+                groups[-1].append(line)
+            previous_bottom = max(previous_bottom, top + float(line["coordinates"][3]))
     return groups
 
 
@@ -1188,12 +1431,26 @@ def _text_block(
         warnings.append("native text disagrees with visible OCR; OCR selected")
     native_word_count = len(re.findall(r"\w+", region.native_text, re.UNICODE))
     ocr_word_count = len(re.findall(r"\w+", visible_ocr, re.UNICODE))
-    if use_native and agreement is not None and agreement >= 0.35 and ocr_word_count >= native_word_count + 2:
+    repaired_native = (
+        _merge_owned_native_word_insertions(region.native_text, visible_ocr, lines)
+        if use_native and agreement is not None and agreement >= 0.65 else region.native_text
+    )
+    if use_native and repaired_native != region.native_text:
+        raw = repaired_native
+        selected = "hybrid"
+        use_native = False
+    elif use_native and agreement is not None and agreement >= 0.35 and ocr_word_count >= native_word_count + 2:
         raw = _hybrid_text(region.native_text, visible_ocr)
         selected = "hybrid"
         use_native = False
     else:
         raw = region.native_text if use_native else visible_ocr
+    if selected in {"native", "hybrid"}:
+        supplemented = _append_distinct_ocr_identifiers(raw, lines)
+        if supplemented != raw:
+            raw = supplemented
+            selected = "hybrid"
+            use_native = False
     normalized = clean_text(raw)
     if selected == "hybrid":
         methods = ["native PDF text", "RapidOCR", "PP-OCRv6", "Python token reconciliation", "Python layout normalization"]
@@ -1252,14 +1509,13 @@ def _visual_text_panel_blocks(
     document_id: str, source_hash: str, inspection: PageInspection, region: Region,
     lines: list[dict[str, Any]], image: Path, page_lines: list[dict[str, Any]],
 ) -> list[SourceBlock]:
-    """Create a structural parent and leaf blocks for mixed text embedded in one image region."""
+    """Keep whitespace-separated image text in independent physical regions."""
     groups = _split_visual_text_lines(lines)
     if len(groups) <= 1:
         region.native_text = ""
         return [_text_block(document_id, source_hash, inspection, region, lines, image, 1.1)]
 
-    parent_id = f"{region.region_id}-content-group"
-    children: list[SourceBlock] = []
+    blocks: list[SourceBlock] = []
     for index, group_lines in enumerate(groups, 1):
         coordinates = _line_box(group_lines)
         text = clean_text(_ocr_text(group_lines))
@@ -1281,26 +1537,242 @@ def _visual_text_panel_blocks(
                 ],
             },
         )
-        child = _text_block(document_id, source_hash, inspection, subregion, group_lines, image, 1.1)
-        child.parent_block_id = parent_id
-        child.hierarchy_depth = 1
-        child.heading_level = 2 if child.type == "heading" else None
-        child.semantic_role = (
+        block = _text_block(document_id, source_hash, inspection, subregion, group_lines, image, 1.1)
+        block.semantic_role = (
             "brand_mark_text" if _looks_like_brand_mark(group_lines, page_lines)
-            else _semantic_role_for_text(child.type, text, coordinates, region.page, nested=True)
+            else _semantic_role_for_text(block.type, text, coordinates, region.page)
         )
-        children.append(child)
+        blocks.append(block)
+    return blocks
 
-    parent = SourceBlock(
-        document_id=document_id, type="group", page=region.page, block_id=parent_id,
-        content={"role": "mixed_text_panel", "child_block_ids": [child.block_id for child in children]},
-        coordinates=region.coordinates,
-        extraction_method=["RapidOCR", "PP-OCRv6", "Python whitespace segmentation"],
-        confidence=min(child.confidence for child in children), validation_status="passed",
-        provenance=_provenance(source_hash, region, [], image),
-        semantic_role="content_panel", child_block_ids=[child.block_id for child in children],
-    )
-    return [parent, *children]
+
+def _spatial_residual_text_blocks(
+    document_id: str, source_hash: str, inspection: PageInspection, region: Region,
+    lines: list[dict[str, Any]], image: Path, native_threshold: float,
+) -> list[SourceBlock]:
+    """Keep text around separate tables as independent printed regions."""
+    clusters = _cluster_unassigned_lines(list(enumerate(lines)))
+    groups = [segment for cluster in clusters
+              for segment in _split_visual_text_lines([line for _position, line in cluster])]
+    if len(groups) <= 1:
+        return [_text_block(document_id, source_hash, inspection, region, lines, image, native_threshold)]
+    blocks: list[SourceBlock] = []
+    for index, group_lines in enumerate(groups, 1):
+        box = _line_box(group_lines)
+        subregion = Region(
+            region_id=f"{region.region_id}-s{index:03d}", page=region.page,
+            kind="normal_text", coordinates=box, reading_order=region.reading_order + index,
+            classification_method="spatial text grouping around table regions",
+            confidence=region.confidence, metadata={
+                "word_count": len(re.findall(r"\w+", _ocr_text(group_lines), re.UNICODE)),
+                "source_bbox_points": [
+                    box[0] * inspection.width_points / 1000,
+                    box[1] * inspection.height_points / 1000,
+                    (box[0] + box[2]) * inspection.width_points / 1000,
+                    (box[1] + box[3]) * inspection.height_points / 1000,
+                ],
+            },
+        )
+        block = _text_block(
+            document_id, source_hash, inspection, subregion, group_lines, image, native_threshold,
+        )
+        blocks.append(block)
+    return blocks
+
+
+def _recover_vision_photo_regions(
+    document_id: str, source_hash: str, inspection: PageInspection, image: Path,
+    lines: list[dict[str, Any]], plan: dict[str, Any] | None,
+    existing: list[SourceBlock | dict[str, Any]], crops: Path, diagnostics: Path,
+) -> list[SourceBlock]:
+    """Retain sparsely labeled, textured photo proposals on image-only pages."""
+    if not plan:
+        return []
+
+    def overlap_of_smaller(left: list[float], right: list[float]) -> float:
+        lx, ly, lw, lh = left
+        rx, ry, rw, rh = right
+        intersection = (max(0.0, min(lx + lw, rx + rw) - max(lx, rx))
+                        * max(0.0, min(ly + lh, ry + rh) - max(ly, ry)))
+        return intersection / max(1.0, min(lw * lh, rw * rh))
+
+    occupied = [
+        block.coordinates if isinstance(block, SourceBlock) else block["coordinates"]
+        for block in existing
+        if (block.type if isinstance(block, SourceBlock) else block.get("type"))
+        in {"photograph", "chart", "map", "table", "unclassified_visual"}
+    ]
+    recovered: list[SourceBlock] = []
+    with Image.open(image) as page_image:
+        for index, proposal in enumerate(plan.get("blocks", []), 1):
+            label = str(proposal.get("title") or proposal.get("text") or "").strip().casefold()
+            if proposal.get("type") != "photograph" and label != "image":
+                continue
+            raw_box = proposal.get("bbox")
+            if (not isinstance(raw_box, list) or len(raw_box) != 4
+                    or not all(isinstance(value, (int, float)) for value in raw_box)):
+                continue
+            x0, y0, x1, y1 = (float(value) for value in raw_box)
+            box = [x0, y0, x1 - x0, y1 - y0]
+            if not (0 <= x0 < x1 <= 1000 and 0 <= y0 < y1 <= 1000
+                    and 20_000 <= box[2] * box[3] <= 650_000):
+                continue
+            if any(overlap_of_smaller(box, other) >= 0.75 for other in occupied):
+                continue
+            visible = [line for line in lines
+                       if "-ocr-" in str(line.get("evidence_id", ""))
+                       and len(str(line.get("text", "")).strip()) >= 3
+                       and _contains(box, line)]
+            if len(visible) > 2:
+                continue
+            crop_box = (
+                round(x0 * page_image.width / 1000), round(y0 * page_image.height / 1000),
+                round(x1 * page_image.width / 1000), round(y1 * page_image.height / 1000),
+            )
+            sample = page_image.crop(crop_box).convert("RGB").resize((64, 64))
+            channel_stddev = ImageStat.Stat(sample).stddev
+            if statistics.median(channel_stddev) < 35:
+                continue
+            region = Region(
+                region_id=f"p{inspection.page:03d}-vision-image-{index:03d}",
+                page=inspection.page, kind="visual", coordinates=box,
+                reading_order=10_000 + index,
+                classification_method="vision image proposal with pixel-texture and OCR-sparsity checks",
+                confidence=0.70, metadata={"visual_hint": "photograph"},
+            )
+            crop_path = crops / f"{region.region_id}.png"
+            _crop(image, box, crop_path)
+            features = {"photo_crop_channel_stddev": [round(value, 3) for value in channel_stddev],
+                        "ocr_lines_inside": len(visible), "vision_proposal_index": index}
+            features_ref = _write_vision_diagnostic(
+                diagnostics, document_id, source_hash, region, features,
+            )
+            photo = _visual_blocks(
+                document_id, source_hash, region, "photograph", 0.70,
+                ["photo boundary comes from a vision proposal; review against the page"],
+                visible, features, image, crop_path, None, features_ref,
+            )[0]
+            recovered.append(photo)
+            occupied.append(box)
+    return recovered
+
+
+def _apply_region_decomposition(
+    document_id: str, source_hash: str, inspection: PageInspection, image: Path, pdf: Path,
+    lines: list[dict[str, Any]], plan: dict[str, Any] | None,
+    blocks: list[dict[str, Any]], crops: Path, diagnostics: Path,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Replace a broad owner only after distinct regions have independent support."""
+    from .region_decomposition import empty_table_artifacts, propose_regions, select_regions
+
+    def _box_intersection(left: list[float], right: list[float]) -> float:
+        return (max(0, min(left[0] + left[2], right[0] + right[2]) - max(left[0], right[0]))
+                * max(0, min(left[1] + left[3], right[1] + right[3]) - max(left[1], right[1])))
+
+    proposals = propose_regions(image, inspection, lines, plan, pdf)
+    broad = [block for block in blocks
+             if block["coordinates"][2] * block["coordinates"][3] >= 450_000
+             and block["type"] in {"map", "unclassified_visual", "text"}]
+    chosen = select_regions(proposals, lines, blocks)
+    rapid = [line for line in lines if "-ocr-" in str(line.get("evidence_id", ""))]
+    covered = {key for item in chosen for key in item["ocr_evidence_ids"]}
+    other_owned = {key for block in blocks if block not in broad
+                   for key in block.get("provenance", {}).get("ocr_evidence_ids", [])}
+    coverage = (len((covered | other_owned) & {line["evidence_id"] for line in rapid})
+                / max(1, len(rapid)))
+    visual_supported = any(item["kind"] in {"photograph", "map"} for item in chosen)
+    card_supported = sum(item["kind"] == "tenant_card" for item in chosen) >= 2
+    decompose = bool(broad and len(chosen) >= 2 and coverage >= 0.85
+                     and (visual_supported or card_supported))
+    # On a page without a broad visual owner, a PDF image member can still
+    # reveal a missing photograph. It may not claim existing OCR text.
+    additive = [item for item in chosen if item["kind"] == "photograph"
+                and item["origin"] == "pdf_image_member"
+                and len(item["ocr_evidence_ids"]) <= 2]
+    active = chosen if decompose else additive if not broad else []
+    # A broad fallback text box can hide an independently bounded PDF photo.
+    # Preserve its transcript in the photo as unresolved raw evidence.
+    photo_replacement = next((item for item in additive
+                              if any(block["type"] == "text"
+                                     and not block["provenance"]["ocr_evidence_ids"]
+                                     and _box_intersection(item["coordinates"], block["coordinates"])
+                                     / max(1, block["coordinates"][2] * block["coordinates"][3]) >= 0.7
+                                     for block in broad)), None)
+    if broad and not decompose and photo_replacement:
+        active = [photo_replacement]
+    replaced = (broad if decompose else [block for block in broad
+                if photo_replacement and block["type"] == "text"
+                and not block["provenance"]["ocr_evidence_ids"]])
+    photo_boxes = [item["coordinates"] for item in active if item["kind"] == "photograph"]
+    blank_overlays = empty_table_artifacts(blocks, photo_boxes)
+    receipt = {"page": inspection.page, "proposals": proposals,
+               "selected": [{key: value for key, value in item.items() if key != "ocr_evidence_ids"}
+                            for item in active],
+               "rapidocr_line_coverage": round(coverage, 4),
+               "broad_owner_replaced": [block["block_id"] for block in replaced],
+               "empty_table_artifacts_removed": [block["block_id"] for block in blank_overlays],
+               "status": "decomposed" if decompose else "photo_recovered" if replaced
+                         else "additive_photo" if active else "retained_for_review"}
+    if not active:
+        return blocks, receipt
+    remaining = [block for block in blocks if block not in replaced and block not in blank_overlays]
+    by_id = {line["evidence_id"]: line for line in rapid}
+    existing = {block["block_id"] for block in remaining}
+    for index, item in enumerate(active, 1):
+        kind = item["kind"]
+        box = item["coordinates"]
+        item_lines = [by_id[key] for key in item["ocr_evidence_ids"] if key in by_id]
+        region = Region(
+            region_id=f"p{inspection.page:03d}-decomposed-{index:03d}",
+            page=inspection.page, kind="normal_text" if kind in {"text_panel", "tenant_card"} else "visual",
+            coordinates=box, reading_order=10_000 + index,
+            classification_method="independent OCR and pixel region decomposition",
+            confidence=0.72, metadata={"source_bbox_points": [
+                box[0] * inspection.width_points / 1000,
+                box[1] * inspection.height_points / 1000,
+                (box[0] + box[2]) * inspection.width_points / 1000,
+                (box[1] + box[3]) * inspection.height_points / 1000,
+            ]},
+        )
+        crop_path = crops / f"{region.region_id}.png"
+        _crop(image, box, crop_path)
+        if kind in {"text_panel", "tenant_card"}:
+            block = _text_block(document_id, source_hash, inspection, region, item_lines, image, 1.1)
+            block.semantic_role = "profile_biography" if kind == "tenant_card" else "text_panel"
+            block.content["region_image"] = f"region-images/{crop_path.name}"
+            block.validation_status = "needs_review"
+            block.warnings.append("region boundary inferred from OCR layout; inspect crop for omitted print")
+            new_blocks = [block]
+        elif kind == "table":
+            new_blocks = _table_blocks(document_id, source_hash, region, item_lines, image)
+            for block in new_blocks:
+                block.validation_status = "needs_review"
+                block.warnings.append("table inferred from OCR grid; cell ownership needs review")
+                block.content["region_image"] = f"region-images/{crop_path.name}"
+        else:
+            features = {"region_decomposition": item["support"], "boundary_origin": item["origin"]}
+            features_ref = _write_vision_diagnostic(
+                diagnostics, document_id, source_hash, region, features,
+            )
+            new_blocks = _visual_blocks(
+                document_id, source_hash, region, kind, 0.72,
+                ["region boundary supported by pixels and OCR; review physical extent"],
+                item_lines, features, image, crop_path, None, features_ref,
+            )
+        for block in new_blocks:
+            if block.block_id in existing:
+                raise ValueError(f"duplicate decomposed block: {block.block_id}")
+            existing.add(block.block_id)
+            payload = block.as_dict()
+            if photo_replacement and item is photo_replacement:
+                raw = "\n".join(str(old.get("content", {}).get("text", "")) for old in replaced).strip()
+                if raw:
+                    payload["raw_evidence_lines"] = [{"evidence_id": f"{region.region_id}-paddle-layout",
+                                                      "source": "paddle_layout_text", "text": raw,
+                                                      "confidence": 0.5, "coordinates": box}]
+                    payload["validation"]["status"] = "needs_review"
+            remaining.append(payload)
+    return remaining, receipt
 
 
 def _table_blocks(
@@ -1357,6 +1829,8 @@ def _table_blocks(
                 and second_numeric <= len(rows) // 3
                 and second_labels >= math.ceil(0.7 * len(rows))):
             rows = [[row[1], row[0]] for row in rows]
+            if cell_coordinates:
+                cell_coordinates = [[row[1], row[0]] for row in cell_coordinates]
             paddle_value_first = True
     # A two-column label/value list often has no printed header. Preserve its
     # first observation instead of silently treating it as column names.
@@ -1369,6 +1843,8 @@ def _table_blocks(
                 and bool(NUMBER.search(first_value))
                 and (paddle_value_first or value_count >= len(rows) - 1)):
             rows.insert(0, ["Field", "Value"])
+            if cell_coordinates:
+                cell_coordinates = [[None, None], *cell_coordinates]
             inferred_key_value_header = True
     # OCR commonly places a spanning title before the actual column header.
     # Promote the next row only when it looks like a set of printed labels.
@@ -1384,6 +1860,42 @@ def _table_blocks(
             row_sections = row_sections[1:] if row_sections else row_sections
             cell_coordinates = cell_coordinates[1:] if cell_coordinates else cell_coordinates
     if len(rows) == 1 and width >= 2:
+        # A letter-spaced banner can look like a one-row table to the PDF
+        # grid finder. Positioned native glyphs preserve its actual words.
+        glyphs = region.metadata.get("native_panel_words") or []
+        if (region.coordinates[3] <= 45 and len(glyphs) >= 8
+                and all(len(str(glyph.get("text", ""))) == 1
+                        and str(glyph.get("text", "")).isalpha()
+                        and isinstance(glyph.get("coordinates"), list)
+                        and len(glyph["coordinates"]) == 4 for glyph in glyphs)):
+            glyphs = sorted(glyphs, key=lambda glyph: float(glyph["coordinates"][0]))
+            centers_y = [_center(glyph["coordinates"])[1] for glyph in glyphs]
+            gaps = [float(right["coordinates"][0])
+                    - (float(left["coordinates"][0]) + float(left["coordinates"][2]))
+                    for left, right in zip(glyphs, glyphs[1:])]
+            typical_gap = statistics.median(gap for gap in gaps if gap >= 0) if all(gap >= 0 for gap in gaps) else 0
+            if (max(centers_y) - min(centers_y) <= 5 and typical_gap > 0
+                    and max(gaps) >= typical_gap * 1.7):
+                words = [str(glyphs[0]["text"])]
+                for glyph, gap in zip(glyphs[1:], gaps):
+                    if gap >= typical_gap * 1.7:
+                        words.append("")
+                    words[-1] += str(glyph["text"])
+                if len(words) >= 2 and all(len(word) >= 2 for word in words):
+                    heading_text = " ".join(words)
+                    return [SourceBlock(
+                        document_id=document_id, type="heading", page=region.page,
+                        block_id=f"{region.region_id}-spaced-heading",
+                        content={"text": heading_text, "evidence_text": {
+                            "selected": "native", "native": heading_text,
+                            "ocr": _ocr_text(lines), "token_agreement": None,
+                        }},
+                        coordinates=region.coordinates,
+                        extraction_method=["native PDF positioned glyphs", "Python glyph-gap reconstruction"],
+                        confidence=min(region.confidence, 0.9), validation_status="passed",
+                        provenance=_provenance(source_hash, region, lines, image),
+                        semantic_role="section_heading", heading_level=1,
+                    )]
         layout = reconstruct_comparison_panel(region.metadata.get("native_panel_words") or [])
         if layout:
             panel_review = qwen_payload.get("panel_review") if qwen_payload else None
@@ -1463,6 +1975,69 @@ def _table_blocks(
             errors=[], warnings=comparison_warnings,
             provenance=_provenance(source_hash, region, lines, image),
         )]
+    # Grid extraction can collapse a section label and the next data
+    # row's label into one cell. Split only when separate OCR phrases exactly
+    # reconstruct that native label and the final phrase aligns with the row's
+    # printed numeric cells. Keep the earlier phrase as the row section.
+    if cell_coordinates:
+        ocr_lines = [line for line in lines if "-ocr-" in str(line.get("evidence_id", ""))]
+        for row_index, row in enumerate(rows[1:], 1):
+            if row_index >= len(cell_coordinates) or not cell_coordinates[row_index]:
+                continue
+            label_box = cell_coordinates[row_index][0]
+            if not label_box or not row[0]:
+                continue
+            value_box = next((
+                cell_coordinates[row_index][column]
+                for column in range(1, min(len(row), len(cell_coordinates[row_index])))
+                if re.search(r"\d", str(row[column] or ""))
+                and cell_coordinates[row_index][column]
+            ), None)
+            if not value_box:
+                continue
+            lx, ly, lw, lh = (float(value) for value in label_box)
+            nearby = sorted((
+                line for line in ocr_lines
+                if lx - 15 <= _center(line["coordinates"])[0] <= lx + lw + 20
+                and ly - 15 <= _center(line["coordinates"])[1] <= ly + lh + 15
+            ), key=lambda line: float(line["coordinates"][1]))
+            folded = lambda value: re.sub(r"[^a-z0-9]", "", str(value).casefold())
+            matches = [nearby[start:end] for start in range(len(nearby))
+                       for end in range(start + 2, min(len(nearby), start + 3) + 1)
+                       if folded(" ".join(str(line["text"]) for line in nearby[start:end])) == folded(row[0])]
+            if len(matches) != 1:
+                continue
+            nearby = matches[0]
+            last_y = _center(nearby[-1]["coordinates"])[1]
+            previous_y = _center(nearby[-2]["coordinates"])[1]
+            if (last_y - previous_y < 8
+                    or abs(last_y - _center(value_box)[1]) > 10):
+                continue
+            section = " ".join(str(line["text"]).strip() for line in nearby[:-1])
+            row[0] = str(nearby[-1]["text"]).strip()
+            if len(row_sections) < len(rows):
+                row_sections = list(row_sections) + [None] * (len(rows) - len(row_sections))
+            row_sections[row_index] = section
+
+        # Some PDF fonts expose a dollar glyph as native "S". Accept a
+        # correction only from an independently positioned OCR symbol.
+        for row_index, row in enumerate(rows[1:], 1):
+            if row_index >= len(cell_coordinates):
+                continue
+            for column in range(1, len(row) - 1):
+                if str(row[column] or "").strip() != "S":
+                    continue
+                if column >= len(cell_coordinates[row_index]):
+                    continue
+                symbol_box = cell_coordinates[row_index][column]
+                if not symbol_box:
+                    continue
+                sx, sy, sw, sh = (float(value) for value in symbol_box)
+                symbols = [line for line in ocr_lines if str(line.get("text", "")).strip() == "$"
+                           and sx - 10 <= _center(line["coordinates"])[0] <= sx + sw + 10
+                           and sy - 10 <= _center(line["coordinates"])[1] <= sy + sh + 10]
+                if len(symbols) == 1:
+                    row[column] = "$"
     # PDF and image table parsers sometimes split a printed currency sign into
     # its own cell. Keep the grid width but attach that sign to the adjacent
     # numeric token; a bare "$" is never a value.
@@ -1481,6 +2056,31 @@ def _table_blocks(
                 symbol = current[-1]
                 row[column_index] = current[:-1].rstrip()
                 row[column_index + 1] = symbol + following
+    # A structure parser can prepend a stray glyph to an otherwise intact
+    # scalar. Use a unique positioned OCR scalar only when its numeric token
+    # exactly matches the parser's token in that same physical cell.
+    if cell_coordinates:
+        for row_index, row in enumerate(rows[1:], 1):
+            if row_index >= len(cell_coordinates):
+                continue
+            for column_index in range(1, min(len(row), len(cell_coordinates[row_index]))):
+                raw = str(row[column_index] or "").strip()
+                box = cell_coordinates[row_index][column_index]
+                if not raw or not box or _TABLE_SCALAR.fullmatch(raw):
+                    continue
+                numbers = re.findall(r"\d[\d,.]*", raw)
+                if len(numbers) != 1:
+                    continue
+                x, y, width_box, height_box = (float(value) for value in box)
+                candidates = [line for line in lines
+                              if "-ocr-" in str(line.get("evidence_id", ""))
+                              and float(line.get("confidence", 0)) >= 0.90
+                              and _TABLE_SCALAR.fullmatch(str(line.get("text", "")).strip())
+                              and re.findall(r"\d[\d,.]*", str(line["text"])) == numbers
+                              and x - 10 <= _center(line["coordinates"])[0] <= x + width_box + 10
+                              and y - 10 <= _center(line["coordinates"])[1] <= y + height_box + 10]
+                if len(candidates) == 1:
+                    row[column_index] = str(candidates[0]["text"]).strip()
     reconciliation = _table_total_reconciliation(rows)
     reconciliation_failed = bool(reconciliation and not reconciliation["passed"])
     parent_id = f"{region.region_id}-table"
@@ -1852,6 +2452,49 @@ def _numeric_content_coverage(
     }
 
 
+def _cluster_unassigned_lines(
+    pending: list[tuple[int, dict[str, Any]]],
+) -> list[list[tuple[int, dict[str, Any]]]]:
+    """Make spatial text fragments into conservative raw source regions."""
+    def phrase_covers(native: dict[str, Any], phrase: dict[str, Any]) -> bool:
+        if "-ocr-" not in str(phrase.get("evidence_id", "")):
+            return False
+        needle = re.findall(r"\w+", _fold_token(str(native.get("text", ""))))
+        words = re.findall(r"\w+", _fold_token(str(phrase.get("text", ""))))
+        if not needle or len(needle) > len(words):
+            return False
+        nx, ny = _center(native["coordinates"])
+        px, py, pw, ph = phrase["coordinates"]
+        if not (px - 5 <= nx <= px + pw + 5 and py - 5 <= ny <= py + ph + 5):
+            return False
+        return any(words[start:start + len(needle)] == needle
+                   for start in range(len(words) - len(needle) + 1))
+
+    clusters: list[list[tuple[int, dict[str, Any]]]] = []
+    for item in sorted(pending, key=lambda pair: (
+        float(pair[1]["coordinates"][1]), float(pair[1]["coordinates"][0]),
+    )):
+        line = item[1]
+        x, y, width, height = (float(value) for value in line["coordinates"])
+        matches: list[tuple[float, list[tuple[int, dict[str, Any]]]]] = []
+        for cluster in clusters:
+            if line.get("evidence_source") == "native_pdf_positioned_word":
+                if any(phrase_covers(line, other) for _index, other in cluster):
+                    matches.append((-1.0, cluster))
+                    continue
+            previous = cluster[-1][1]["coordinates"]
+            px, py, pw, ph = (float(value) for value in previous)
+            vertical_gap = y - (py + ph)
+            aligned = abs(x - px) <= 35 or abs((x + width / 2) - (px + pw / 2)) <= 60
+            if aligned and -max(height, ph) <= vertical_gap <= max(30, 1.5 * max(height, ph)):
+                matches.append((abs(vertical_gap) + abs(x - px) / 4, cluster))
+        if matches:
+            min(matches, key=lambda pair: pair[0])[1].append(item)
+        else:
+            clusters.append([item])
+    return clusters
+
+
 def _preserve_ocr_lines_in_blocks(
     blocks: list[dict[str, Any]], lines: list[dict[str, Any]],
     document_id: str, source_hash: str, inspection: PageInspection, image: Path,
@@ -1860,7 +2503,8 @@ def _preserve_ocr_lines_in_blocks(
 
     Existing structured content retains its owner. An owned OCR line omitted by
     that block's content is attached as raw evidence. A line with no defensible
-    owner gets its own source-text block, preserving the exact OCR and image box.
+    owner joins a conservative spatial source-text block, preserving the exact
+    OCR lines and their image boxes.
     """
     def strings(value: Any) -> list[str]:
         if isinstance(value, str):
@@ -1899,6 +2543,7 @@ def _preserve_ocr_lines_in_blocks(
     existing_ids = {block["block_id"] for block in blocks}
     stats = {"ocr_lines": 0, "already_in_owner_content": 0, "owner_recovered": 0,
              "raw_lines_attached": 0, "fallback_text_blocks": 0}
+    pending_fallback: list[tuple[int, dict[str, Any]]] = []
     for index, line in enumerate(lines, 1):
         raw = str(line.get("text") or "")
         if not raw.strip():
@@ -1916,42 +2561,23 @@ def _preserve_ocr_lines_in_blocks(
                 by_owner[evidence_id] = owner
                 stats["owner_recovered"] += 1
             else:
-                coordinates = [float(value) for value in line.get("coordinates", [0, 0, 0, 0])]
+                physical = [block for block in blocks
+                            if "-decomposed-" in block.get("block_id", "")
+                            and block.get("type") in {"text", "heading", "contact"}
+                            and near(block, line)]
+                if len(physical) == 1:
+                    owner = physical[0]
+                    owner["provenance"]["ocr_evidence_ids"].append(evidence_id)
+                    by_owner[evidence_id] = owner
+                    stats["owner_recovered"] += 1
+            if owner is None:
+                try:
+                    coordinates = [float(value) for value in line.get("coordinates", [])]
+                except (TypeError, ValueError):
+                    coordinates = []
                 if len(coordinates) != 4:
                     coordinates = [0.0, 0.0, 0.0, 0.0]
-                block_id = f"p{inspection.page:03d}-raw-ocr-{index:04d}-text"
-                if block_id in existing_ids:
-                    raise ValueError(f"duplicate raw OCR fallback block ID: {block_id}")
-                existing_ids.add(block_id)
-                region = Region(
-                    region_id=f"p{inspection.page:03d}-raw-ocr-{index:04d}",
-                    page=inspection.page, kind="normal_text", coordinates=coordinates,
-                    reading_order=len(blocks) + 1,
-                    classification_method="unassigned OCR line preservation",
-                    confidence=float(line.get("confidence", 0.0)),
-                    metadata={"source_bbox_points": [
-                        coordinates[0] * inspection.width_points / 1000.0,
-                        coordinates[1] * inspection.height_points / 1000.0,
-                        (coordinates[0] + coordinates[2]) * inspection.width_points / 1000.0,
-                        (coordinates[1] + coordinates[3]) * inspection.height_points / 1000.0,
-                    ]},
-                )
-                fallback = SourceBlock(
-                    document_id=document_id, type="text", page=inspection.page,
-                    block_id=block_id, coordinates=coordinates,
-                    content={"text": raw, "evidence_text": {
-                        "selected": "ocr", "native": None, "ocr": raw, "token_agreement": None,
-                    }},
-                    extraction_method=["RapidOCR PP-OCRv6", "Python raw evidence preservation"],
-                    confidence=float(line.get("confidence", 0.0)),
-                    validation_status="needs_review", errors=[],
-                    warnings=["OCR text retained without a verified structural owner"],
-                    provenance=_provenance(source_hash, region, [line], image),
-                    semantic_role="unresolved_source_text",
-                ).as_dict()
-                blocks.append(fallback)
-                by_owner[evidence_id] = fallback
-                stats["fallback_text_blocks"] += 1
+                pending_fallback.append((index, {**line, "coordinates": coordinates}))
                 continue
         if contains(owner, raw):
             stats["already_in_owner_content"] += 1
@@ -1968,6 +2594,50 @@ def _preserve_ocr_lines_in_blocks(
         if warning not in owner["validation"]["warnings"]:
             owner["validation"]["warnings"].append(warning)
         stats["raw_lines_attached"] += 1
+    for cluster in _cluster_unassigned_lines(pending_fallback):
+        first_index = cluster[0][0]
+        cluster_lines = [line for _index, line in cluster]
+        coordinates = _line_box(cluster_lines)
+        raw = _ocr_text(cluster_lines)
+        block_id = f"p{inspection.page:03d}-raw-ocr-{first_index:04d}-text"
+        if block_id in existing_ids:
+            raise ValueError(f"duplicate raw OCR fallback block ID: {block_id}")
+        existing_ids.add(block_id)
+        region = Region(
+            region_id=f"p{inspection.page:03d}-raw-ocr-{first_index:04d}",
+            page=inspection.page, kind="normal_text", coordinates=coordinates,
+            reading_order=len(blocks) + 1,
+            classification_method="unassigned OCR spatial cluster preservation",
+            confidence=min(float(line.get("confidence", 0.0)) for line in cluster_lines),
+            metadata={"source_bbox_points": [
+                coordinates[0] * inspection.width_points / 1000.0,
+                coordinates[1] * inspection.height_points / 1000.0,
+                (coordinates[0] + coordinates[2]) * inspection.width_points / 1000.0,
+                (coordinates[1] + coordinates[3]) * inspection.height_points / 1000.0,
+            ]},
+        )
+        fallback = SourceBlock(
+            document_id=document_id, type="text", page=inspection.page,
+            block_id=block_id, coordinates=coordinates,
+            content={"text": clean_text(raw), "evidence_text": {
+                "selected": "ocr", "native": None, "ocr": raw, "token_agreement": None,
+            }},
+            extraction_method=["RapidOCR PP-OCRv6", "Python spatial evidence preservation"],
+            confidence=region.confidence,
+            validation_status="needs_review", errors=[],
+            warnings=["OCR text retained without a verified structural owner"],
+            provenance=_provenance(source_hash, region, cluster_lines, image),
+            semantic_role="unresolved_source_text",
+        ).as_dict()
+        fallback["raw_evidence_lines"] = [{
+            "evidence_id": str(line["evidence_id"]), "text": str(line["text"]),
+            "confidence": max(0.0, min(1.0, float(line.get("confidence", 0.0)))),
+            "coordinates": line["coordinates"],
+        } for line in cluster_lines]
+        blocks.append(fallback)
+        for line in cluster_lines:
+            by_owner[str(line["evidence_id"])] = fallback
+        stats["fallback_text_blocks"] += 1
     by_id = {block["block_id"]: block for block in blocks}
     for group in sorted(
         (block for block in blocks if block.get("type") == "group"),
@@ -2084,6 +2754,12 @@ def _ground_table_cells_from_ocr(
     def center(box: list[float]) -> tuple[float, float]:
         return box[0] + box[2] / 2, box[1] + box[3] / 2
 
+    def inside(line: dict[str, Any], box: list[float] | None) -> bool:
+        if not box or len(box) != 4:
+            return True
+        x, y = center(line["coordinates"])
+        return box[0] - 5 <= x <= box[0] + box[2] + 5 and box[1] - 5 <= y <= box[1] + box[3] + 5
+
     by_id = {str(line.get("evidence_id")): line for line in lines}
     stats = {"newly_grounded": 0, "still_unverified": 0}
     for block in blocks:
@@ -2100,7 +2776,9 @@ def _ground_table_cells_from_ocr(
         headers: dict[str, dict[str, Any]] = {}
         if len(columns) > 2:
             for column in columns[1:]:
-                matches = [line for line in owned if key(line.get("text")) == key(column.get("label"))]
+                matches = [line for line in owned
+                           if key(line.get("text")) == key(column.get("label"))
+                           and inside(line, column.get("coordinates"))]
                 if len(matches) == 1:
                     headers[column["column_id"]] = matches[0]
                     column["evidence_ids"] = [matches[0]["evidence_id"]]
@@ -2108,7 +2786,8 @@ def _ground_table_cells_from_ocr(
         used_values: set[str] = set()
         for row in rows:
             label_matches = [line for line in owned
-                             if key(row.get("label")) and key(line.get("text")) == key(row.get("label"))]
+                             if key(row.get("label")) and key(line.get("text")) == key(row.get("label"))
+                             and inside(line, row.get("label_coordinates"))]
             if len(label_matches) != 1:
                 continue
             label_line = label_matches[0]
@@ -2123,12 +2802,13 @@ def _ground_table_cells_from_ocr(
                 value_matches = [line for line in owned
                                  if line["evidence_id"] not in used_values
                                  and key(line.get("text")) == key(cell.get("raw_value"))
-                                 and key(cell.get("raw_value"))]
+                                 and key(cell.get("raw_value"))
+                                 and inside(line, cell.get("coordinates"))]
                 plausible = []
                 for line in value_matches:
                     value_x, value_y = center(line["coordinates"])
                     tolerance = max(20.0, (label_line["coordinates"][3] + line["coordinates"][3]) / 2 + 12)
-                    if abs(value_y - label_y) > tolerance:
+                    if not cell.get("coordinates") and abs(value_y - label_y) > tolerance:
                         continue
                     if len(columns) == 2:
                         if value_x <= label_x + 5:
@@ -3852,48 +4532,6 @@ def _set_subtree_depth(block: SourceBlock, depth: int, by_id: dict[str, SourceBl
             _set_subtree_depth(child, depth + 1, by_id)
 
 
-def _group_heading_led_sections(
-    document_id: str, source_hash: str, inspection: PageInspection, image: Path,
-    blocks: list[SourceBlock],
-) -> None:
-    """Create section parents from root headings and the root blocks that follow them."""
-    roots = [block for block in blocks if block.parent_block_id is None]
-    heading_positions = [index for index, block in enumerate(roots) if block.type == "heading"]
-    if not heading_positions:
-        return
-    sections: list[tuple[int, list[SourceBlock]]] = []
-    for section_index, start in enumerate(heading_positions, 1):
-        end = heading_positions[section_index] if section_index < len(heading_positions) else len(roots)
-        children = [
-            block for block in roots[start:end]
-            if block.semantic_role not in {"page_footer", "page_header"}
-        ]
-        if len(children) >= 2:
-            sections.append((section_index, children))
-    for section_index, children in sections:
-        section_id = f"p{inspection.page:03d}-section-{section_index:03d}"
-        coordinates = _line_box([{"coordinates": child.coordinates} for child in children])
-        region = Region(
-            region_id=section_id, page=inspection.page, kind="group", coordinates=coordinates,
-            reading_order=children[0].provenance.get("reading_order", 1),
-            classification_method="heading-led-section-grouping", confidence=min(child.confidence for child in children),
-        )
-        section = SourceBlock(
-            document_id=document_id, type="group", page=inspection.page, block_id=section_id,
-            content={"role": "section", "child_block_ids": [child.block_id for child in children]},
-            coordinates=coordinates, extraction_method=["Python heading-led hierarchy"],
-            confidence=region.confidence, validation_status="passed",
-            provenance=_provenance(source_hash, region, [], image), semantic_role="document_section",
-            child_block_ids=[child.block_id for child in children],
-        )
-        insertion = min(blocks.index(child) for child in children)
-        blocks.insert(insertion, section)
-        by_id = {block.block_id: block for block in blocks}
-        for child in children:
-            child.parent_block_id = section_id
-            _set_subtree_depth(child, 1, by_id)
-
-
 def _suppress_visual_observation_text_duplicates(blocks: list[SourceBlock]) -> None:
     """Remove native text copies of evidence already represented as visual observations.
 
@@ -4025,7 +4663,9 @@ def _route_and_extract_page(
     blocks: list[SourceBlock] = []
     assigned: set[str] = set()
     route_errors: list[str] = []
-    lines_by_region = _exclusive_region_lines(inspection.regions, page_lines)
+    ownership_decisions: list[dict[str, Any]] = []
+    lines_by_region = _exclusive_region_lines(inspection.regions, page_lines, ownership_decisions)
+    ocr_page["region_ownership_decisions"] = ownership_decisions
     absorbed_regions = _absorb_structured_visual_text(inspection, lines_by_region, vision_plan)
     absorbed_regions.update(_claim_single_value_cards(inspection.regions, page_lines, lines_by_region))
     visual_footnotes = _separate_visual_footnotes(inspection, lines_by_region)
@@ -4038,6 +4678,12 @@ def _route_and_extract_page(
         plan_hint = region.metadata.get("vision_plan") or {}
         plan_type = str(plan_hint.get("type") or "")
         if region.kind == "normal_text":
+            if (region.metadata.get("paddle_split_residual")
+                    or region.classification_method == "RapidOCR spatial prose lane split") and lines:
+                blocks.extend(_spatial_residual_text_blocks(
+                    document_id, source_hash, inspection, region, lines, image, native_threshold,
+                ))
+                continue
             structured = _inline_heading_subsection_blocks(
                 document_id, source_hash, inspection, region, lines, image, native_threshold,
             )
@@ -4302,7 +4948,10 @@ def _route_and_extract_page(
     _attach_background_decorations(blocks)
     _arrange_page_blocks(blocks)
     _order_overlapping_visual_headings(blocks)
-    _group_heading_led_sections(document_id, source_hash, inspection, image, blocks)
+    # Heading-order sections are a semantic convenience, not physical source
+    # regions. A mixed page can put an unrelated sidebar or header after a
+    # heading in reading order, so evidence USBs keep only spatially supported
+    # parents here. Semantic sections belong in the downstream context stage.
     _normalize_page_heading_roles(blocks)
     for note, owner_region_id in pending_footnotes:
         owner = next((block for block in blocks if
@@ -4481,7 +5130,11 @@ def run_pipeline(
 
         # PP-StructureV3 sees every likely table page, including pages where
         # the native PDF parser already found a table. It is independent of Qwen.
-        from .paddle_tables import apply_paddle_tables, page_needs_table_analysis, table_candidates
+        from .paddle_tables import (
+            apply_paddle_tables, page_needs_table_analysis,
+            screen_table_candidates_against_ocr, table_candidates,
+        )
+        from .ocr_disagreement import needs_second_ocr, record_disagreements
         from .spatial_lanes import split_mixed_key_value_regions
 
         pre_paddle_inspections = {
@@ -4494,6 +5147,7 @@ def run_pipeline(
             for inspection in selected_inspections
             if page_needs_table_analysis(inspection, plans.get(inspection.page),
                                          ocr_for_tables.get(inspection.page, {"lines": []}))
+            or needs_second_ocr(ocr_for_tables.get(inspection.page, {"lines": []}))
         }
         if paddle_images:
             paddle_summary = run_paddle_table_worker(paddle_images, paddle_dir, paddle_python, paddle_device)
@@ -4505,15 +5159,21 @@ def run_pipeline(
             }
             _write_json(paddle_dir / "summary.json", paddle_summary)
         paddle_pages = {int(item["page"]): item for item in paddle_summary["pages"]}
+        paddle_payloads: dict[int, dict[str, Any]] = {}
         for page_inspection in selected_inspections:
             receipt = paddle_pages.get(page_inspection.page, {})
             if page_inspection.page in paddle_images and receipt.get("status") == "complete":
                 payload = json.loads(Path(receipt["result"]).read_text(encoding="utf-8"))
+                paddle_payloads[page_inspection.page] = payload
                 with Image.open(rendered[page_inspection.page]) as page_image:
                     width, height = page_image.size
-                candidates = table_candidates(payload, width, height)
+                candidates, rejected = screen_table_candidates_against_ocr(
+                    table_candidates(payload, width, height),
+                    ocr_for_tables.get(page_inspection.page, {}).get("lines", []),
+                )
                 apply_paddle_tables(page_inspection, candidates)
                 receipt["usable_table_candidates"] = len(candidates)
+                receipt["rejected_table_candidates"] = rejected
             elif page_inspection.page in paddle_images:
                 for region in page_inspection.regions:
                     if region.kind == "table":
@@ -4568,6 +5228,8 @@ def run_pipeline(
         page_records = []
         type_counts: Counter[str] = Counter()
         status_counts: Counter[str] = Counter()
+        decomposition_counts: Counter[str] = Counter()
+        disagreement_total = 0
         collection_errors: list[str] = []
         for inspection in selected_inspections:
             raw_ocr_page = ocr_by_page.get(inspection.page, {"lines": [], "regions": {}})
@@ -4659,6 +5321,15 @@ def run_pipeline(
                     routing_decision = "ocr_supported_table_candidate_selected"
                 else:
                     routing_decision = "vision_candidate_rejected_without_independent_support"
+            if plan:
+                blocks.extend(block.as_dict() for block in _recover_vision_photo_regions(
+                    document_id, source_hash, inspection, rendered[inspection.page],
+                    ocr_page.get("lines", []), plan, blocks, crops_dir, diagnostics_dir,
+                ))
+            blocks, region_decomposition = _apply_region_decomposition(
+                document_id, source_hash, inspection, rendered[inspection.page], pdf,
+                ocr_page.get("lines", []), plan, blocks, crops_dir, diagnostics_dir,
+            )
             reconciliation = reconcile_page(
                 inspection.page, plan, blocks,
                 ocr_page.get("lines", []),
@@ -4683,6 +5354,14 @@ def run_pipeline(
                 document_id, source_hash, inspection, rendered[inspection.page],
             )
             table_grounding = _ground_table_cells_from_ocr(blocks, ocr_page.get("lines", []))
+            disagreement = record_disagreements(
+                inspection.page, rendered[inspection.page], ocr_page.get("lines", []),
+                paddle_payloads.get(inspection.page), blocks,
+                output / "disagreement-crops",
+                output / "diagnostics" / "ocr-disagreements" / f"page-{inspection.page:03d}.json",
+            )
+            decomposition_counts[region_decomposition["status"]] += 1
+            disagreement_total += disagreement["unresolved_count"]
             owned_ids = {
                 evidence_id for block in blocks
                 for evidence_id in block.get("provenance", {}).get("ocr_evidence_ids", [])
@@ -4693,6 +5372,9 @@ def run_pipeline(
             reconciliation["raw_ocr_capture"] = raw_capture
             reconciliation["source_observation_capture"] = source_capture
             reconciliation["table_grounding"] = table_grounding
+            reconciliation["ocr_disagreement"] = disagreement
+            reconciliation["region_decomposition"] = region_decomposition
+            reconciliation["region_ownership_decisions"] = ocr_page.get("region_ownership_decisions", [])
             _write_json(reconciliation_dir / f"page-{inspection.page:03d}.json", reconciliation)
             reconciliation_counts.update(reconciliation["counts"])
             if inspection.page not in plans:
@@ -4782,9 +5464,20 @@ def run_pipeline(
             "counts": dict(sorted(reconciliation_counts.items())),
             "policy": "image-only vision and native/OCR/OpenCV run independently; only uniquely printed, spatially owned pairs can correct a source block; uncertainty remains in review",
         })
+        manifest["region_decomposition"] = {
+            "page_status_counts": dict(sorted(decomposition_counts.items())),
+            "receipts": "reconciliation/page-NNN.json#region_decomposition",
+        }
+        manifest["ocr_disagreement"] = {
+            "unresolved_count": disagreement_total,
+            "receipts": "diagnostics/ocr-disagreements/page-NNN.json",
+            "crops": "disagreement-crops/",
+        }
         manifest["stages"].extend([
             {"name": "region-routing-and-extraction", "status": "complete", "finished_utc": _now()},
+            {"name": "evidence-gated-page-region-decomposition", "status": "complete", "finished_utc": _now()},
             {"name": "independent-claim-reconciliation", "status": "complete", "finished_utc": _now()},
+            {"name": "ocr-disagreement-preservation", "status": "complete", "finished_utc": _now()},
             {"name": "reconstruction-and-validation", "status": "complete", "finished_utc": _now()},
             {"name": "unified-source-block-collection", "status": "complete", "finished_utc": _now()},
         ])

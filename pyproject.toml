@@ -12,10 +12,12 @@ dependencies = [
   "pypdf>=5",
   "Pillow>=10",
   "jsonschema>=4.23",
+  "numpy>=1.26,<3",
+  "opencv-python-headless>=4.10",
 ]
 
 [project.optional-dependencies]
-ocr = ["rapidocr>=3.9.2", "onnxruntime>=1.20", "opencv-python-headless>=4.10"]
+ocr = ["rapidocr>=3.9.2", "onnxruntime>=1.20"]
 tables = ["paddleocr[doc-parser]>=3.3,<3.6", "paddlepaddle>=3.2.2,<3.3"]
 dev = ["pytest>=8"]
 validate = ["jsonschema>=4.23"]

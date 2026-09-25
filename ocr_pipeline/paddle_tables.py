@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
 import re
 from typing import Any
@@ -13,11 +14,16 @@ class _TableParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.rows: list[list[str]] = []
+        self.cell_index_rows: list[list[int]] = []
         self.row: list[str] | None = None
+        self.row_cell_indices: list[int] | None = None
         self.cell: list[str] | None = None
+        self.current_cell_index: int | None = None
+        self.cell_count = 0
         self.colspan = 1
         self.rowspan = 1
         self.pending_rowspans: dict[int, int] = {}
+        self.pending_cell_indices: dict[int, int] = {}
 
     def _fill_pending(self) -> None:
         if self.row is None:
@@ -25,15 +31,20 @@ class _TableParser(HTMLParser):
         while self.pending_rowspans.get(len(self.row), 0) > 0:
             column = len(self.row)
             self.row.append("")
+            if self.row_cell_indices is not None:
+                self.row_cell_indices.append(self.pending_cell_indices[column])
             self.pending_rowspans[column] -= 1
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag == "tr":
             self.row = []
+            self.row_cell_indices = []
             self._fill_pending()
         elif tag in {"td", "th"} and self.row is not None:
             self._fill_pending()
             self.cell = []
+            self.current_cell_index = self.cell_count
+            self.cell_count += 1
             attributes = dict(attrs)
             self.colspan = max(1, int(attributes.get("colspan") or 1))
             self.rowspan = max(1, int(attributes.get("rowspan") or 1))
@@ -49,15 +60,22 @@ class _TableParser(HTMLParser):
             start = len(self.row)
             self.row.append(re.sub(r"\s+", " ", "".join(self.cell)).strip())
             self.row.extend([""] * (self.colspan - 1))
+            if self.row_cell_indices is not None and self.current_cell_index is not None:
+                self.row_cell_indices.extend([self.current_cell_index] * self.colspan)
             if self.rowspan > 1:
                 for column in range(start, len(self.row)):
                     self.pending_rowspans[column] = self.rowspan - 1
+                    if self.current_cell_index is not None:
+                        self.pending_cell_indices[column] = self.current_cell_index
             self.cell = None
+            self.current_cell_index = None
         elif tag == "tr" and self.row is not None:
             self._fill_pending()
             if self.row:
                 self.rows.append(self.row)
+                self.cell_index_rows.append(self.row_cell_indices or [])
             self.row = None
+            self.row_cell_indices = None
 
 
 def html_rows(html: str) -> list[list[str]]:
@@ -65,6 +83,17 @@ def html_rows(html: str) -> list[list[str]]:
     parser.feed(html)
     width = max((len(row) for row in parser.rows), default=0)
     return [row + [""] * (width - len(row)) for row in parser.rows]
+
+
+def html_rows_with_cell_indices(html: str) -> tuple[list[list[str]], list[list[int | None]], int]:
+    parser = _TableParser()
+    parser.feed(html)
+    width = max((len(row) for row in parser.rows), default=0)
+    return (
+        [row + [""] * (width - len(row)) for row in parser.rows],
+        [row + [None] * (width - len(row)) for row in parser.cell_index_rows],
+        parser.cell_count,
+    )
 
 
 def _intersection_fraction(a: list[float], b: list[float]) -> float:
@@ -129,7 +158,9 @@ def table_candidates(payload: dict[str, Any], width: int, height: int) -> list[d
     results = body.get("table_res_list") or []
     candidates = []
     for index, result in enumerate(results):
-        rows = html_rows(str(result.get("pred_html") or ""))
+        rows, cell_indices, cell_count = html_rows_with_cell_indices(
+            str(result.get("pred_html") or ""),
+        )
         if len(rows) < 2:
             continue
         bbox = result.get("bbox") or result.get("table_bbox")
@@ -143,12 +174,80 @@ def table_candidates(payload: dict[str, Any], width: int, height: int) -> list[d
             continue
         if box[2] <= 0 or box[3] <= 0:
             continue
+        raw_cell_boxes = result.get("cell_box_list") or []
+        cell_coordinates: list[list[list[float] | None]] = []
+        if len(raw_cell_boxes) == cell_count:
+            try:
+                normalized_cells = [
+                    _normal_box([float(value) for value in cell], width, height)
+                    for cell in raw_cell_boxes
+                ]
+                if all(cell[2] > 0 and cell[3] > 0 for cell in normalized_cells):
+                    cell_coordinates = [
+                        [normalized_cells[cell_index] if cell_index is not None else None
+                         for cell_index in row]
+                        for row in cell_indices
+                    ]
+            except (TypeError, ValueError, IndexError, ZeroDivisionError):
+                pass
         candidates.append({
             "index": index, "coordinates": box, "rows": rows,
+            "cell_coordinates": cell_coordinates,
             "layout_score": float(layout[index].get("score", 0.0)) if index < len(layout) else None,
             "structure_status": "grid" if len(rows[0]) >= 2 else "layout_only",
         })
     return candidates
+
+
+def screen_table_candidates_against_ocr(
+    candidates: list[dict[str, Any]], ocr_lines: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Reject table transcripts contradicted by numeric OCR in their own crop.
+
+    PP-Structure can detect the correct grid but attach HTML text from a
+    different part of the page. This guard applies only when both sides have
+    enough distinct numbers for a meaningful comparison.
+    """
+    number_pattern = re.compile(r"(?<![A-Za-z])[-+]?\$?(\d[\d,]*(?:\.\d+)?)")
+
+    def numeric_keys(text: str) -> set[str]:
+        keys: set[str] = set()
+        for match in number_pattern.finditer(text):
+            raw = match.group(1).replace(",", "")
+            if len(raw.replace(".", "")) < 2:
+                continue
+            try:
+                keys.add(str(Decimal(raw).normalize()))
+            except InvalidOperation:
+                continue
+        return keys
+
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for candidate in candidates:
+        x, y, width, height = (float(value) for value in candidate["coordinates"])
+        nearby = [line for line in ocr_lines
+                  if (x - 8 <= float(line["coordinates"][0])
+                      + float(line["coordinates"][2]) / 2 <= x + width + 8)
+                  and (y - 8 <= float(line["coordinates"][1])
+                       + float(line["coordinates"][3]) / 2 <= y + height + 8)]
+        table_numbers = numeric_keys(" ".join(
+            str(cell or "") for row in candidate.get("rows", []) for cell in row
+        ))
+        crop_numbers = numeric_keys(" ".join(str(line.get("text", "")) for line in nearby))
+        matched = table_numbers & crop_numbers
+        if (len(table_numbers) >= 3 and len(crop_numbers) >= 3
+                and len(matched) < 2 and len(matched) / len(table_numbers) < 0.25):
+            rejected.append({
+                "candidate_index": candidate["index"],
+                "reason": "table transcript numbers disagree with independent OCR inside grid",
+                "table_numeric_count": len(table_numbers),
+                "crop_numeric_count": len(crop_numbers),
+                "matched_numeric_count": len(matched),
+            })
+            continue
+        accepted.append(candidate)
+    return accepted, rejected
 
 
 def _split_multi_table_regions(inspection: PageInspection, candidates: list[dict[str, Any]]) -> set[int]:
@@ -200,6 +299,7 @@ def _split_multi_table_regions(inspection: PageInspection, candidates: list[dict
                 confidence=min(0.75, item["layout_score"]),
                 metadata={
                     "rows": item["rows"], "rows_source": "paddle",
+                    "cell_coordinates": item.get("cell_coordinates", []),
                     "paddle_table_review": {
                         "status": "candidate", "candidate_index": item["index"],
                         "overlap": 1.0, "row_count": len(item["rows"]),
@@ -247,6 +347,7 @@ def apply_paddle_tables(inspection: PageInspection, candidates: list[dict[str, A
         if not native:
             region.metadata["rows"] = item["rows"]
             region.metadata["rows_source"] = "paddle"
+            region.metadata["cell_coordinates"] = item.get("cell_coordinates", [])
             region.metadata["paddle_table_review"] = {
                 "status": "candidate", "candidate_index": item["index"],
                 "overlap": round(overlap, 4), "row_count": len(item["rows"]),
@@ -306,6 +407,7 @@ def apply_paddle_tables(inspection: PageInspection, candidates: list[dict[str, A
         if item.get("structure_status") != "layout_only":
             region.metadata["rows"] = item["rows"]
             region.metadata["rows_source"] = "paddle"
+            region.metadata["cell_coordinates"] = item.get("cell_coordinates", [])
         region.metadata["paddle_table_review"] = {
             "status": "layout_only" if item.get("structure_status") == "layout_only" else "candidate",
             "candidate_index": item["index"],

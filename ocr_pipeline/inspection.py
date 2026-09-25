@@ -442,6 +442,12 @@ def _visuals_belong_together(
     # Wide bottom bands are normally repeated branding, not part of the analytical visual above.
     if any(bbox[1] >= page_height * 0.84 and (bbox[2] - bbox[0]) >= page_width * 0.70 for bbox in (left, right)):
         return False
+    # A page-wide design band can overlap a smaller chart image. Joining them
+    # would make the chart's ownership box span the adjacent prose column.
+    if _is_background_band(left, page_width, page_height) != _is_background_band(
+        right, page_width, page_height,
+    ):
+        return False
     ix = max(0.0, min(left[2], right[2]) - max(left[0], right[0]))
     iy = max(0.0, min(left[3], right[3]) - max(left[1], right[1]))
     if ix > 0 and iy > 0:
@@ -457,6 +463,60 @@ def _visuals_belong_together(
         and _projection_overlap(left[0], left[2], right[0], right[2]) >= 0.35
     )
     return horizontally_adjacent or vertically_adjacent
+
+
+def _is_background_band(
+    bbox: tuple[float, float, float, float], page_width: float, page_height: float,
+) -> bool:
+    width, height = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    return (width >= page_width * 0.90 and page_height * 0.08 <= height <= page_height * 0.55
+            and width >= height * 3.0)
+
+
+def _sparse_page_table(
+    bbox: tuple[float, float, float, float], rows: list[list[Any]],
+    page_width: float, page_height: float,
+) -> bool:
+    """Reject a page-frame grid with little evidence of repeated table rows."""
+    width_ratio = (bbox[2] - bbox[0]) / page_width
+    height_ratio = (bbox[3] - bbox[1]) / page_height
+    if width_ratio < 0.85 or height_ratio < 0.80 or len(rows) < 5:
+        return False
+    width = max((len(row) for row in rows), default=0)
+    if width < 2:
+        return False
+    populated_per_row = [sum(bool(str(cell or "").strip()) for cell in row) for row in rows]
+    density = sum(populated_per_row) / (len(rows) * width)
+    paired_rows = sum(count >= 2 for count in populated_per_row)
+    # A few unrelated panels on an otherwise sparse page can each put two
+    # strings in a row. Require repeated populated rows across the grid before
+    # letting a page-sized candidate own the whole page.
+    return density < 0.30 and paired_rows / len(rows) < 0.40
+
+
+def _partition_words_at_filled_bands(
+    words: list[dict[str, Any]], rectangles: list[dict[str, Any]],
+    page_width: float, page_height: float,
+) -> list[list[dict[str, Any]]]:
+    """Keep text across wide filled bands in separate physical regions."""
+    separators = sorted({
+        float(rectangle["top"])
+        for rectangle in rectangles
+        if rectangle.get("fill") is True
+        and rectangle.get("non_stroking_color") is not None
+        and float(rectangle.get("x1", 0)) - float(rectangle.get("x0", 0)) >= page_width * 0.75
+        and page_height * 0.015 <= float(rectangle.get("bottom", 0)) - float(rectangle.get("top", 0))
+        <= page_height * 0.15
+        and 0 < float(rectangle.get("top", 0)) < page_height
+    })
+    if not separators:
+        return [words]
+    groups: list[list[dict[str, Any]]] = [[] for _ in range(len(separators) + 1)]
+    for word in words:
+        center_y = (float(word["top"]) + float(word["bottom"])) / 2
+        index = sum(center_y >= separator for separator in separators)
+        groups[index].append(word)
+    return [group for group in groups if group]
 
 
 def merge_visual_objects(
@@ -781,6 +841,15 @@ def inspect_pdf(pdf_path: Path) -> tuple[list[PageInspection], dict[str, Any]]:
                 if width_ratio >= 0.96 and height_ratio >= 0.96 and len(rows) <= 4:
                     warnings.append(f"ignored_full_page_table_false_positive_{table_index}")
                     continue
+                if _sparse_page_table(bbox, rows, width, height):
+                    warnings.append(f"ignored_sparse_page_frame_table_{table_index}")
+                    continue
+                # A text box or portrait border can be reported as a table by
+                # the PDF line finder. With fewer than two populated cells it
+                # has no row/value structure to preserve as a table.
+                if len(rows) <= 2 and sum(bool(str(cell or "").strip()) for row in rows for cell in row) < 2:
+                    warnings.append(f"ignored_empty_table_frame_{table_index}")
+                    continue
                 table_candidates.append((table, bbox, rows))
             all_images = []
             large_images = []
@@ -879,9 +948,21 @@ def inspect_pdf(pdf_path: Path) -> tuple[list[PageInspection], dict[str, Any]]:
                 ))
 
             logical_visuals = merge_visual_objects(large_images, width, height)
+            background_band_indices = {
+                index for index, visual in enumerate(logical_visuals)
+                if _is_background_band(tuple(visual["content_bbox"]), width, height)
+                and any(
+                    other_index != index
+                    and not _is_background_band(tuple(other["content_bbox"]), width, height)
+                    and _overlap_ratio(
+                        tuple(visual["content_bbox"]), tuple(other["content_bbox"]),
+                    ) >= 0.05
+                    for other_index, other in enumerate(logical_visuals)
+                )
+            }
             masked_slices = _pdf_soft_mask_slices(list(page.images or []), width, height)
             # Full-page scan images are represented once, not as a duplicate visual over native text.
-            for visual in logical_visuals:
+            for visual_index, visual in enumerate(logical_visuals):
                 bbox = visual["bbox"]
                 content_bbox = tuple(visual["content_bbox"])
                 content_center = (content_bbox[0] + content_bbox[2]) / 2.0
@@ -898,10 +979,13 @@ def inspect_pdf(pdf_path: Path) -> tuple[list[PageInspection], dict[str, Any]]:
                     continue
                 order += 1
                 image_indices = visual["image_indices"]
-                method = "pdf-image-object-merge" if len(image_indices) > 1 else "pdf-image-object"
+                is_background_band = visual_index in background_band_indices
+                method = ("pdf-background-band" if is_background_band else
+                          "pdf-image-object-merge" if len(image_indices) > 1 else "pdf-image-object")
                 regions.append(Region(
                     region_id=f"p{page_number:03d}-r{order:03d}", page=page_number,
-                    kind="visual", coordinates=_normalized_xywh(bbox, width, height),
+                    kind="decoration" if is_background_band else "visual",
+                    coordinates=_normalized_xywh(bbox, width, height),
                     reading_order=order, classification_method=method,
                     confidence=0.72 if len(image_indices) > 1 else 0.58,
                     metadata={
@@ -924,6 +1008,8 @@ def inspect_pdf(pdf_path: Path) -> tuple[list[PageInspection], dict[str, Any]]:
                 ))
                 if len(image_indices) > 1:
                     warnings.append(f"merged_{len(image_indices)}_image_objects_into_1_visual_region")
+                if is_background_band:
+                    warnings.append("separated_overlapping_background_band_from_visual")
 
             existing_visual_bboxes = [
                 tuple(region.metadata["source_bbox_points"])
@@ -994,23 +1080,26 @@ def inspect_pdf(pdf_path: Path) -> tuple[list[PageInspection], dict[str, Any]]:
             words = [word for word in words if not any(_center_in(
                 (float(word["x0"]), float(word["top"]), float(word["x1"]), float(word["bottom"])), bbox
             ) for bbox in excluded)]
-            for paragraph in _group_words(words):
-                order += 1
-                regions.append(Region(
-                    region_id=f"p{page_number:03d}-r{order:03d}", page=page_number,
-                    kind="normal_text", coordinates=_normalized_xywh(paragraph["bbox"], width, height),
-                    reading_order=order, classification_method="native-positioned-words",
-                    confidence=quality, native_text=paragraph["text"],
-                    metadata={
-                        "median_font_size": paragraph["median_font_size"],
-                        "word_count": paragraph["word_count"],
-                        "source_bbox_points": list(paragraph["bbox"]),
-                        **({"reading_lane": paragraph["reading_lane"]}
-                           if paragraph.get("reading_lane") else {}),
-                        **({"column_gutter_points": paragraph["column_gutter_points"]}
-                           if paragraph.get("column_gutter_points") else {}),
-                    },
-                ))
+            for physical_words in _partition_words_at_filled_bands(
+                words, list(page.rects or []), width, height,
+            ):
+                for paragraph in _group_words(physical_words):
+                    order += 1
+                    regions.append(Region(
+                        region_id=f"p{page_number:03d}-r{order:03d}", page=page_number,
+                        kind="normal_text", coordinates=_normalized_xywh(paragraph["bbox"], width, height),
+                        reading_order=order, classification_method="native-positioned-words",
+                        confidence=quality, native_text=paragraph["text"],
+                        metadata={
+                            "median_font_size": paragraph["median_font_size"],
+                            "word_count": paragraph["word_count"],
+                            "source_bbox_points": list(paragraph["bbox"]),
+                            **({"reading_lane": paragraph["reading_lane"]}
+                               if paragraph.get("reading_lane") else {}),
+                            **({"column_gutter_points": paragraph["column_gutter_points"]}
+                               if paragraph.get("column_gutter_points") else {}),
+                        },
+                    ))
 
             if not regions:
                 regions.append(Region(
