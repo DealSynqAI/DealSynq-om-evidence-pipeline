@@ -4,7 +4,7 @@ from PIL import Image
 from reportlab.pdfgen import canvas
 
 from ocr_pipeline.models import PageInspection, Region, SourceBlock
-from ocr_pipeline.pipeline import _preserve_source_observations
+from ocr_pipeline.evidence_capture import _preserve_source_observations
 from ocr_pipeline.source_observations import (
     _match_ocr, collect_page_observations, is_layout_glyph, represented_in_content,
 )
@@ -94,3 +94,7 @@ def test_content_support_requires_printed_text_not_structural_metadata():
     assert is_layout_glyph({"source": "native_pdf_word", "text": "&"})
     assert not is_layout_glyph({"source": "native_pdf_word", "text": "$"})
     assert not is_layout_glyph({"source": "native_pdf_word", "text": "-"})
+    assert not is_layout_glyph({"source": "native_pdf_word", "text": "–"})
+    assert not is_layout_glyph({"source": "native_pdf_word", "text": "+"})
+    assert is_layout_glyph({"source": "native_pdf_word", "text": "—"})
+    assert is_layout_glyph({"source": "native_pdf_word", "text": ""})

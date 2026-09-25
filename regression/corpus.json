@@ -1,0 +1,16 @@
+{
+  "_comment": "Stored full runs under runs/ that the gate replays. Each must contain page-images/, work/rapidocr-results.json, paddle-tables/, vision-plans/, source/ and manifest.json.",
+  "documents": {
+    "ameris": "ameris-review-policy-full-20260924-v3",
+    "chateau": "chateau-review-upgrade-full-20260924",
+    "concourse": "concourse-review-policy-full-20260924-v3",
+    "coulton": "coulton-coverage-final-full-20260923",
+    "dinkeytown": "dinkeytown-evidence-v2-full-20260923",
+    "haven-senior": "haven-senior-review-policy-full-20260924-v3",
+    "isabella": "isabella-ownership-full-20260924",
+    "maravida": "maravida-review-upgrade-full-20260924",
+    "marble-hill": "marble-hill-review-policy-full-20260924-v3",
+    "torquoise": "torquoise-review-policy-full-20260924-v3",
+    "winter-haven": "winter-haven-review-policy-full-20260924-v3"
+  }
+}

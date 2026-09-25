@@ -17,8 +17,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pages", help="Page selection such as 1-3,8")
     parser.add_argument("--dpi", type=int, default=300)
     parser.add_argument("--native-threshold", type=float, default=0.78)
-    parser.add_argument("--route-threshold", type=float, default=0.72)
-    parser.add_argument("--skip-ocr", action="store_true", help="Native-PDF smoke tests only")
     parser.add_argument("--rapidocr-python", type=Path)
     parser.add_argument("--rapidocr-models", type=Path)
     parser.add_argument("--paddle-python", type=Path,
@@ -37,16 +35,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if not args.qwen_endpoint or args.skip_ocr:
-        parser.error("this pipeline requires an independent full-page vision attempt and OCR; remove --skip-ocr and supply --qwen-endpoint")
+    if not args.qwen_endpoint:
+        parser.error("this pipeline requires an independent full-page vision attempt; supply --qwen-endpoint")
     output = args.output
     if output is None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         output = Path(__file__).resolve().parents[1] / "runs" / f"{args.pdf.stem}-{stamp}"
     result = run_pipeline(
         args.pdf, output, pages_spec=args.pages, dpi=args.dpi,
-        native_threshold=args.native_threshold, route_threshold=args.route_threshold,
-        skip_ocr=args.skip_ocr, rapidocr_python=args.rapidocr_python,
+        native_threshold=args.native_threshold, rapidocr_python=args.rapidocr_python,
         rapidocr_models=args.rapidocr_models, pdftoppm=args.pdftoppm,
         qwen_endpoint=args.qwen_endpoint, qwen_model=args.qwen_model,
         vision_plan_cache=args.vision_plan_cache,

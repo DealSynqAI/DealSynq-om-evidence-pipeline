@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -111,20 +110,3 @@ def recover(image: Path, output: Path, page: int, endpoint: str, model: str, tim
     return receipt
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--page", type=int, required=True)
-    parser.add_argument("--endpoint", default="http://127.0.0.1:11434/v1/chat/completions")
-    parser.add_argument("--model", default="dealsynq-qwen3-vl:4b-instruct-16k")
-    parser.add_argument("--timeout", type=int, default=360)
-    args = parser.parse_args()
-    result = recover(args.image, args.output, args.page, args.endpoint, args.model, args.timeout)
-    print(json.dumps({"page": args.page, "status": result["status"],
-                      "tile_recovery_status": result["tile_recovery_status"]}, indent=2))
-    return 0 if result["status"] == "complete" else 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -207,7 +207,7 @@ def _attach_printed_amount_to_percentage(
     existing = observation.get("companion_value")
     if existing:
         return {"decision": "agreement" if existing.get("evidence_id") == amount["evidence_id"] else "companion_conflict_needs_review"}
-    from .pipeline import _numeric_value
+    from .common import _numeric_value
     numeric, unit, normalized = _numeric_value(str(amount["text"]))
     if numeric is None:
         return None

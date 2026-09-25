@@ -6,14 +6,11 @@ attempt receipts are retained even when JSON parsing fails.
 
 from __future__ import annotations
 
-import argparse
 import base64
 from collections import Counter
-from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
-import time
 import urllib.request
 
 from PIL import Image
@@ -155,63 +152,3 @@ def validate_proposal(raw: str, page: int) -> dict:
     return parsed
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--images", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--pages", type=int, required=True)
-    parser.add_argument("--endpoint", default="http://127.0.0.1:11434/v1/chat/completions")
-    parser.add_argument("--model", default="dealsynq-qwen3-vl:4b-instruct-16k")
-    parser.add_argument("--timeout", type=int, default=360)
-    parser.add_argument("--attempts", type=int, default=2)
-    args = parser.parse_args()
-    args.output.mkdir(parents=True, exist_ok=True)
-    for page in range(1, args.pages + 1):
-        stem = f"page-{page:03d}"
-        image = args.images / f"{stem}.png"
-        receipt_path = args.output / f"{stem}.receipt.json"
-        if receipt_path.exists():
-            print(f"{stem}: already attempted; preserving original result", flush=True)
-            continue
-        start = time.perf_counter()
-        receipt = {"page": page, "model": args.model, "endpoint": args.endpoint,
-                   "image_sha256": sha256(image), "prompt_sha256": hashlib.sha256(PROMPT.encode()).hexdigest(),
-                   "input_policy": "rendered page image only; no OCR/PDF/OpenCV/reference",
-                   "started_utc": datetime.now(timezone.utc).isoformat()}
-        attempts = []
-        for attempt in range(1, args.attempts + 1):
-            attempt_start = time.perf_counter()
-            attempt_record = {"attempt": attempt, "max_tokens": 8192 if attempt == 1 else 12000}
-            try:
-                raw, answer = call(image, page, args.endpoint, args.model, args.timeout, attempt)
-                (args.output / f"{stem}.attempt-{attempt:02d}.raw.txt").write_text(raw, encoding="utf-8")
-                attempt_record.update({"usage": answer.get("usage"),
-                                       "finish_reason": answer["choices"][0].get("finish_reason"),
-                                       "raw_characters": len(raw)})
-                parsed = validate_proposal(raw, page)
-                (args.output / f"{stem}.raw.txt").write_text(raw, encoding="utf-8")
-                (args.output / f"{stem}.json").write_text(
-                    json.dumps(parsed, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-                attempt_record["status"] = "complete"
-                receipt.update({"status": "complete", "block_count": len(parsed["blocks"])})
-                print(f"{stem}: {receipt['block_count']} blocks (attempt {attempt})", flush=True)
-            except Exception as exc:
-                attempt_record.update({"status": "failed", "error_type": type(exc).__name__,
-                                       "error": str(exc)[:1000]})
-                print(f"{stem}: attempt {attempt} FAILED {type(exc).__name__}: {exc}", flush=True)
-            attempt_record["seconds"] = round(time.perf_counter() - attempt_start, 3)
-            attempts.append(attempt_record)
-            if attempt_record["status"] == "complete":
-                break
-        receipt["attempts"] = attempts
-        if "status" not in receipt:
-            receipt.update({"status": "failed", "error_type": attempts[-1]["error_type"],
-                            "error": attempts[-1]["error"]})
-        receipt["seconds"] = round(time.perf_counter() - start, 3)
-        receipt["finished_utc"] = datetime.now(timezone.utc).isoformat()
-        receipt_path.write_text(json.dumps(receipt, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

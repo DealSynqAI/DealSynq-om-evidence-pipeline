@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import statistics
 from typing import Any
 
 from PIL import Image
@@ -57,12 +58,104 @@ def _nearby(box: list[float], paddle: list[dict[str, Any]]) -> list[dict[str, An
         ix, iy = _intersection(box, other)
         if ix >= 0.35 * min(box[2], other[2]) and iy >= 0.30 * min(box[3], other[3]):
             matches.append(line)
-    return sorted(matches, key=lambda item: (item["coordinates"][1] // 12,
-                                             item["coordinates"][0]))
+    # PP-Structure often returns one word at a time. Slightly staggered word
+    # boxes on the same printed line must be read left-to-right; fixed Y bins
+    # can move a middle word to the end and manufacture a disagreement.
+    rows: list[list[dict[str, Any]]] = []
+    for item in sorted(matches, key=lambda value: value["coordinates"][1]
+                       + value["coordinates"][3] / 2):
+        x, y, width, height = item["coordinates"]
+        center = y + height / 2
+        nearest = min(rows, key=lambda row: abs(center - statistics.median(
+            entry["coordinates"][1] + entry["coordinates"][3] / 2 for entry in row
+        )), default=None)
+        if nearest is not None and abs(center - statistics.median(
+                entry["coordinates"][1] + entry["coordinates"][3] / 2
+                for entry in nearest)) <= 0.5 * min(
+                    height, statistics.median(entry["coordinates"][3] for entry in nearest)
+                ):
+            nearest.append(item)
+        else:
+            rows.append([item])
+    rows.sort(key=lambda row: statistics.median(
+        entry["coordinates"][1] + entry["coordinates"][3] / 2 for entry in row
+    ))
+    return [item for row in rows for item in sorted(row, key=lambda value: value["coordinates"][0])]
 
 
 def _normalized(text: str) -> str:
     return re.sub(r"\s+", "", text).casefold()
+
+
+def _comparable(text: str) -> str:
+    """Text as far as it bears on meaning.
+
+    Case, spacing, currency symbols, and punctuation away from numbers are
+    dropped. Minus signs, accounting parentheses, percent signs, approximation
+    and comparison signs beside a number, and the separators inside a number
+    are kept, because they change a value.
+    """
+    text = str(text).casefold().replace("−", "-").replace("–", "-")
+    kept = []
+    for index, character in enumerate(text):
+        before = text[index - 1] if index else ""
+        after = text[index + 1] if index + 1 < len(text) else ""
+        if character.isalnum():
+            kept.append(character)
+        elif character.isspace():
+            kept.append(" ")
+        elif character in ".," and before.isdigit() and after.isdigit():
+            kept.append(character)
+        elif character in "-(" and (after.isdigit() or after in "$€£"):
+            kept.append(character)
+        elif character in ")%" and (before.isdigit() or before == "%"):
+            kept.append(character)
+        elif character in "~<>≈≤≥" and (after.isdigit() or before.isdigit()):
+            kept.append(character)
+    return re.sub(r" +", " ", "".join(kept)).strip()
+
+
+def _native_text_confirms(block: dict[str, Any], text: str) -> bool:
+    """Whether the PDF text layer behind a block's content prints this OCR reading.
+
+    Text layer and RapidOCR are independent readings; when they agree, a third
+    engine's different reading does not make the content uncertain.
+    """
+    content = block.get("content", {})
+    evidence = content.get("evidence_text") or {}
+    native = evidence.get("native") if evidence.get("selected") in {"native", "hybrid"} else None
+    if native is None and "native PDF table parser" in block.get("extraction_method", []):
+        # A native table's labels and cells are text-layer strings.
+        native = " | ".join(str(value) for value in (
+            [column.get("label") for column in content.get("columns", [])]
+            + [row.get("label") for row in content.get("rows", [])]
+            + [cell.get("raw_value") for row in content.get("rows", []) for cell in row.get("cells", [])]
+        ) if value)
+    return bool(native) and bool(_comparable(text)) and _comparable(text) in _comparable(str(native))
+
+
+def _same_reading(left: str, right: str) -> bool:
+    """Readings agree, or one engine read a longer or shorter piece of the same line.
+
+    The longer reading may only add whole words around the shorter one; an added
+    sign, digit, or unit touching it is a real difference ("-$21,903" is not
+    "$21,903").
+    """
+    first, second = _comparable(left), _comparable(right)
+    if not first or not second:
+        return False
+    if first.replace(" ", "") == second.replace(" ", ""):
+        return True
+    short, long = sorted((first, second), key=len)
+    start = long.find(short)
+    while start != -1:
+        before = long[start - 1] if start else " "
+        end = start + len(short)
+        after = long[end] if end < len(long) else " "
+        if before == " " and after == " ":
+            return True
+        start = long.find(short, start + 1)
+    return False
 
 
 def _crop(image: Path, box: list[float], destination: Path) -> None:
@@ -120,6 +213,13 @@ def record_disagreements(
         confidence = float(line.get("confidence", 1))
         matches = _nearby(line["coordinates"], paddle)
         alternative = " ".join(item["text"] for item in matches)
+        if alternative and _same_reading(alternative, str(line["text"])):
+            # A second engine that reads the same text confirms the line, even
+            # a low-confidence one.
+            continue
+        owner = by_ocr.get(evidence_id)
+        if owner is not None and _native_text_confirms(owner, str(line["text"])):
+            continue
         different = alternative and _normalized(alternative) != _normalized(str(line["text"]))
         meaningful = different and (difflib.SequenceMatcher(
             None, _normalized(alternative), _normalized(str(line["text"]))).ratio() >= 0.35)
@@ -149,13 +249,16 @@ def record_disagreements(
         if not matches:
             return
         alternative = " ".join(item["text"] for item in matches)
-        if (_normalized(str(raw)) in _normalized(alternative)
+        if (_same_reading(str(raw), alternative)
                 or not any(item["confidence"] >= 0.75 for item in matches)):
             return
         rapid = [item for item in _nearby(box, rapid_lines)
                  if "-ocr-" in str(item.get("evidence_id", ""))
                  and box[0] - 3 <= item["coordinates"][0] + item["coordinates"][2] / 2
                  <= box[0] + box[2] + 3]
+        if rapid and _same_reading(str(raw), " ".join(item["text"] for item in rapid)):
+            # The table text and RapidOCR agree; PaddleOCR is outvoted.
+            return
         readings = [{"source": "RapidOCR", "text": " ".join(item["text"] for item in rapid),
                      "confidence": min(item["confidence"] for item in rapid),
                      "evidence_id": ",".join(item["evidence_id"] for item in rapid)}] if rapid else []

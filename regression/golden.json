@@ -1,0 +1,667 @@
+{
+  "_comment": "Facts checked by hand against rendered page images (2026-09-25). expect=pass facts hold today and must keep holding; expect=known_failure facts are verified-wrong and tracked until fixed.",
+  "table_cells": [
+    {
+      "doc": "coulton",
+      "page": 6,
+      "row": "Industrial Real Estate",
+      "column": "Total Invested",
+      "value": "400,000",
+      "numeric": 400000
+    },
+    {
+      "doc": "coulton",
+      "page": 6,
+      "row": "Multifamily Real Estate",
+      "column": "Non-controlling Interest",
+      "value": "10,816,437"
+    },
+    {
+      "doc": "coulton",
+      "page": 6,
+      "row": "Residential Development",
+      "column": "Leverage (CCC Debt)",
+      "value": "1,710,928"
+    },
+    {
+      "doc": "coulton",
+      "page": 6,
+      "row": "Retail Real Estate",
+      "column": "Return of Capital",
+      "value": "972,330"
+    },
+    {
+      "doc": "coulton",
+      "page": 6,
+      "row": "Real Estate Bridge Loans",
+      "column": "% of CCC Equity",
+      "value": "9.3%"
+    },
+    {
+      "doc": "coulton",
+      "page": 6,
+      "row": "Total Investment Portfolio",
+      "column": "Coulton Creek Equity",
+      "value": "$98,411,527"
+    },
+    {
+      "doc": "isabella",
+      "page": 10,
+      "row": "776 Bolyston St",
+      "column": "Sale Price",
+      "value": "$6,100,000"
+    },
+    {
+      "doc": "isabella",
+      "page": 10,
+      "row": "94 Chestnut St",
+      "column": "$/SF",
+      "value": "$1,980"
+    },
+    {
+      "doc": "isabella",
+      "page": 10,
+      "row": "430 Stuart St",
+      "row_where": {
+        "column": "Unit",
+        "value": "PH34D"
+      },
+      "column": "List Price",
+      "value": "$9,900,000"
+    },
+    {
+      "doc": "isabella",
+      "page": 10,
+      "row": "27 Isabella St",
+      "row_where": {
+        "column": "Unit",
+        "value": "9"
+      },
+      "column": "Square Feet",
+      "value": "2,786"
+    },
+    {
+      "doc": "isabella",
+      "page": 10,
+      "row": "Average",
+      "column": "Sale Price",
+      "value": "$3,341,251"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 2,
+      "row": "7.50%",
+      "column": "Returns",
+      "value": "14.2%/ 1.5x"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 2,
+      "row": "5.50%",
+      "column": "Returns",
+      "value": "26.1%/2.0x"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 3,
+      "row": "ABS, Enclosed-Reimbursements",
+      "column": "Year 2 Dec-27",
+      "value": "$135,463",
+      "numeric": 135463
+    },
+    {
+      "doc": "winter-haven",
+      "page": 4,
+      "row": "EquityMultiple Share of Net Levered Cash Flow",
+      "column": "Acquisition",
+      "value": "-$95,638",
+      "numeric": -95638
+    },
+    {
+      "doc": "winter-haven",
+      "page": 3,
+      "row": "Total Potential Income",
+      "column": "Year 1 Dec-26",
+      "value": "$442,685",
+      "numeric": 442685,
+      "expect": "known_failure",
+      "note": "Paddle placed the In-Place header over the rate column, so most rows sit one year to the right"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 3,
+      "row": "Vacancy & Credit Loss",
+      "column": "Year 1 Dec-26",
+      "value": "-$22,134",
+      "numeric": -22134,
+      "expect": "known_failure",
+      "note": "one-column shift"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 3,
+      "row": "NET OPERATING INCOME",
+      "column": "Year 7 Dec-32",
+      "value": "$696,385",
+      "expect": "known_failure",
+      "note": "one-column shift"
+    },
+    {
+      "doc": "chateau",
+      "page": 12,
+      "row": "Roof Type",
+      "column": "Value",
+      "value": "Asphalt Shingles, Mansard"
+    },
+    {
+      "doc": "chateau",
+      "page": 12,
+      "row": "Water/Sewer",
+      "column": "Value",
+      "value": "OWASA"
+    },
+    {
+      "doc": "chateau",
+      "page": 21,
+      "row": "Deal Level IRR",
+      "column": "Value",
+      "value": "21.9%"
+    },
+    {
+      "doc": "chateau",
+      "page": 21,
+      "row": "Sales Price",
+      "column": "Value",
+      "value": "$30,148,883"
+    },
+    {
+      "doc": "torquoise",
+      "page": 1,
+      "row": "Total LP Investment",
+      "column": "Value",
+      "value": "($5,725,501)",
+      "numeric": -5725501
+    },
+    {
+      "doc": "torquoise",
+      "page": 1,
+      "row": "IRR",
+      "column": "Value",
+      "value": "23.66%"
+    },
+    {
+      "doc": "haven-senior",
+      "page": 7,
+      "row": "IRR (pp)",
+      "column": "+5%",
+      "value": "-0.8 to -1.5"
+    },
+    {
+      "doc": "haven-senior",
+      "page": 7,
+      "row": "IRR (pp)",
+      "column": "+100 bps",
+      "value": "-3.5 to -5.5"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 3,
+      "row": "Total Potential Income",
+      "column": "Year 2 Dec-27",
+      "value": "$458,056",
+      "numeric": 458056,
+      "expect": "known_failure",
+      "note": "OCR reads the comma as a period; the value is recovered, the printed text is not"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 3,
+      "row": "Total Operating Expenses",
+      "column": "In-Place",
+      "value": "-$130,104",
+      "expect": "known_failure",
+      "note": "row missing from the Paddle grid"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 3,
+      "row": "Asset Management Fee",
+      "column": "Year 1 Dec-26",
+      "value": "-$31,946",
+      "expect": "known_failure",
+      "note": "row label lost, values shifted"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 3,
+      "row": "Senior Loan Debt Yield",
+      "column": "Year 1 Dec-26",
+      "value": "10.2%",
+      "expect": "known_failure",
+      "note": "row missing"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 4,
+      "row": "EquityMultiple Share of Net Levered Cash Flow1",
+      "column": "Acquisition",
+      "value": "-$2,850,000",
+      "expect": "known_failure",
+      "note": "Acquisition and Year 1 merged into one cell"
+    },
+    {
+      "doc": "isabella",
+      "page": 12,
+      "row": "Net Monthly Cash Flow",
+      "column": "4/10/26",
+      "value": "-$26,512",
+      "expect": "known_failure",
+      "note": "row missing and header row wrong"
+    },
+    {
+      "doc": "chateau",
+      "page": 21,
+      "row": "Effective Gross Income",
+      "column": "Year 1",
+      "value": "$2,396,568",
+      "expect": "known_failure",
+      "note": "native parser merges the row's values into its label"
+    }
+  ],
+  "visual_values": [
+    {
+      "doc": "coulton",
+      "page": 9,
+      "label": "Coulton Creek Capital",
+      "value": "68%"
+    },
+    {
+      "doc": "coulton",
+      "page": 9,
+      "label": "SPV LPs",
+      "value": "31%"
+    },
+    {
+      "doc": "coulton",
+      "page": 9,
+      "label": "Founders & Employees",
+      "value": "26%"
+    },
+    {
+      "doc": "coulton",
+      "page": 9,
+      "label": "Other Investors",
+      "value": "42%"
+    },
+    {
+      "doc": "coulton",
+      "page": 9,
+      "label": "Return of Capital",
+      "value": "0.7%"
+    },
+    {
+      "doc": "coulton",
+      "page": 11,
+      "label": "2014",
+      "value": "11.3%"
+    },
+    {
+      "doc": "coulton",
+      "page": 11,
+      "label": "2017",
+      "value": "18.9%"
+    },
+    {
+      "doc": "coulton",
+      "page": 11,
+      "label": "2023",
+      "value": "18.5%"
+    },
+    {
+      "doc": "coulton",
+      "page": 13,
+      "label": "2019",
+      "value": "$12.5M"
+    },
+    {
+      "doc": "coulton",
+      "page": 13,
+      "label": "2019",
+      "value": "11.0x"
+    },
+    {
+      "doc": "coulton",
+      "page": 13,
+      "label": "2023",
+      "value": "8.7x"
+    },
+    {
+      "doc": "coulton",
+      "page": 14,
+      "label": "Jun-18",
+      "value": "9%"
+    },
+    {
+      "doc": "coulton",
+      "page": 14,
+      "label": "Sep-19",
+      "value": "22%"
+    },
+    {
+      "doc": "coulton",
+      "page": 14,
+      "label": "Dec-23",
+      "value": "10%"
+    },
+    {
+      "doc": "coulton",
+      "page": 8,
+      "label": "Colorado",
+      "value": "41.4%"
+    },
+    {
+      "doc": "coulton",
+      "page": 8,
+      "label": "Pennsylvania",
+      "value": "10.1%"
+    },
+    {
+      "doc": "coulton",
+      "page": 8,
+      "label": "Massachusetts",
+      "value": "1.3%"
+    },
+    {
+      "doc": "coulton",
+      "page": 8,
+      "label": "Connecticut",
+      "value": "1.3%"
+    },
+    {
+      "doc": "coulton",
+      "page": 8,
+      "label": "New Jersey",
+      "value": "4.3%"
+    },
+    {
+      "doc": "coulton",
+      "page": 8,
+      "label": "Maryland",
+      "value": "0.4%"
+    },
+    {
+      "doc": "coulton",
+      "page": 8,
+      "label": "Texas",
+      "value": "8.0%"
+    },
+    {
+      "doc": "coulton",
+      "page": 8,
+      "label": "Puerto Rico",
+      "value": "1.4%"
+    },
+    {
+      "doc": "coulton",
+      "page": 3,
+      "label": "Investments Funded to Date",
+      "value": "$277 million"
+    },
+    {
+      "doc": "coulton",
+      "page": 3,
+      "label": "Current Portfolio at cost basis",
+      "value": "$146 million"
+    },
+    {
+      "doc": "coulton",
+      "page": 3,
+      "label": "Investments",
+      "value": "168",
+      "expect": "known_failure",
+      "note": "KPI panel keeps 2 of its 4 printed figures"
+    },
+    {
+      "doc": "concourse",
+      "page": 11,
+      "label": "1100 Tyler Ave #207",
+      "value": "$1124 | 13 yrs",
+      "expect": "known_failure",
+      "note": "horizontal bar chart values are not extracted"
+    }
+  ],
+  "review": [
+    {
+      "doc": "coulton",
+      "page": 6,
+      "type": "table",
+      "anchor": "Multifamily Real Estate",
+      "status": "passed"
+    },
+    {
+      "doc": "isabella",
+      "page": 10,
+      "type": "table",
+      "anchor": "776 Bolyston St",
+      "status": "passed"
+    },
+    {
+      "doc": "haven-senior",
+      "page": 7,
+      "type": "table",
+      "anchor": "Labor vs. Base",
+      "status": "passed"
+    },
+    {
+      "doc": "haven-senior",
+      "page": 7,
+      "type": "table",
+      "anchor": "Exit Cap Shift",
+      "status": "passed"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 2,
+      "type": "table",
+      "anchor": "7.50%",
+      "status": "passed"
+    },
+    {
+      "doc": "chateau",
+      "page": 12,
+      "type": "table",
+      "anchor": "Roof Type",
+      "status": "passed"
+    },
+    {
+      "doc": "chateau",
+      "page": 12,
+      "type": "table",
+      "anchor": "Water/Sewer",
+      "status": "passed"
+    },
+    {
+      "doc": "chateau",
+      "page": 21,
+      "type": "table",
+      "anchor": "Deal Level IRR",
+      "status": "passed"
+    },
+    {
+      "doc": "chateau",
+      "page": 21,
+      "type": "table",
+      "anchor": "Sales Price",
+      "status": "passed"
+    },
+    {
+      "doc": "torquoise",
+      "page": 1,
+      "type": "table",
+      "anchor": "LP Net Return",
+      "status": "passed"
+    },
+    {
+      "doc": "coulton",
+      "page": 11,
+      "type": "chart",
+      "anchor": "2014",
+      "status": "passed"
+    },
+    {
+      "doc": "coulton",
+      "page": 14,
+      "type": "chart",
+      "anchor": "Jun-18",
+      "status": "passed"
+    },
+    {
+      "doc": "coulton",
+      "page": 8,
+      "type": "map",
+      "anchor": "Colorado",
+      "status": "passed"
+    },
+    {
+      "doc": "isabella",
+      "page": 12,
+      "type": "table",
+      "anchor": "Senior Loan Balance",
+      "status": "needs_review"
+    },
+    {
+      "doc": "isabella",
+      "page": 15,
+      "type": "table",
+      "anchor": "73400967",
+      "status": "needs_review"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 3,
+      "type": "table",
+      "anchor": "NET OPERATING INCOME",
+      "status": "needs_review"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 4,
+      "type": "table",
+      "anchor": "EquityMultiple Share of Net Levered Cash Flow",
+      "status": "needs_review"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 4,
+      "type": "table",
+      "anchor": "EquityMultiple Share of Net Levered Cash Flow1",
+      "status": "needs_review"
+    },
+    {
+      "doc": "winter-haven",
+      "page": 5,
+      "type": "table",
+      "anchor": "$156,750 (one-time)",
+      "status": "needs_review"
+    },
+    {
+      "doc": "chateau",
+      "page": 21,
+      "type": "table",
+      "anchor": "Operating Expenses",
+      "status": "needs_review"
+    },
+    {
+      "doc": "chateau",
+      "page": 21,
+      "type": "table",
+      "anchor": "Cash-on-Cash Return 5.84% 8.90% 7.77% 8.46%",
+      "status": "needs_review"
+    },
+    {
+      "doc": "chateau",
+      "page": 12,
+      "type": "table",
+      "anchor": "1x1 A (Classic) 75 800 $1,093 $1.37 $1,105",
+      "status": "needs_review"
+    },
+    {
+      "doc": "concourse",
+      "page": 15,
+      "type": "table",
+      "anchor": "Debt (@70% LTC)",
+      "status": "needs_review"
+    },
+    {
+      "doc": "maravida",
+      "page": 6,
+      "type": "chart",
+      "anchor": null,
+      "status": "needs_review"
+    },
+    {
+      "doc": "coulton",
+      "page": 3,
+      "type": "kpi_panel",
+      "anchor": "Investments Funded to Date",
+      "status": "needs_review"
+    }
+  ],
+  "no_chart_pages": [
+    {
+      "doc": "chateau",
+      "page": 5,
+      "note": "bullets and icon cards"
+    },
+    {
+      "doc": "chateau",
+      "page": 13,
+      "note": "strategy text and a photo"
+    },
+    {
+      "doc": "chateau",
+      "page": 18,
+      "note": "street map"
+    },
+    {
+      "doc": "chateau",
+      "page": 23,
+      "note": "contact page"
+    },
+    {
+      "doc": "concourse",
+      "page": 12,
+      "note": "comparable photos and fact lines"
+    },
+    {
+      "doc": "concourse",
+      "page": 13,
+      "note": "photo collage"
+    },
+    {
+      "doc": "concourse",
+      "page": 15,
+      "note": "Sources and Uses table"
+    },
+    {
+      "doc": "concourse",
+      "page": 16,
+      "note": "offering terms table"
+    },
+    {
+      "doc": "isabella",
+      "page": 4,
+      "note": "building photo and text"
+    },
+    {
+      "doc": "maravida",
+      "page": 13,
+      "note": "operating statement table"
+    },
+    {
+      "doc": "maravida",
+      "page": 14,
+      "note": "returns table"
+    }
+  ]
+}

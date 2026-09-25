@@ -546,8 +546,6 @@ def validate_run(run: Path, schema_path: Path | None = None) -> dict[str, Any]:
                             )
                     elif disposition == "verbatim_glyph":
                         if (not is_layout_glyph(observation)
-                                or owner.get("type") not in {"text", "heading", "footnote", "contact",
-                                                            "brand_mark", "comparison_panel"}
                                 or not any(
                                     item.get("evidence_id") == evidence_id
                                     and item.get("text") == observation.get("text")
@@ -626,6 +624,17 @@ def validate_run(run: Path, schema_path: Path | None = None) -> dict[str, Any]:
                                     integrity_errors.append(
                                         f"page {page_number}: {block.get('block_id')} has an ungrounded OCR column"
                                     )
+                    elif grounding == "ocr_same_line":
+                        # One printed line carries the row label followed by its value.
+                        values = cell.get("evidence_ids") or []
+                        compact = lambda value: re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+                        printed = str(ocr_by_id.get(values[0], {}).get("text") or "") if len(values) == 1 else ""
+                        if (row.get("label_evidence_ids") != values or not printed
+                                or compact(printed) != compact(row.get("label")) + compact(cell.get("raw_value"))
+                                or row.get("label_coordinates") is None or cell.get("coordinates") is None):
+                            integrity_errors.append(
+                                f"page {page_number}: {block.get('block_id')} has an unsupported same-line table cell"
+                            )
                     elif grounding == "native_positioned":
                         if row.get("label_coordinates") is None or cell.get("coordinates") is None:
                             integrity_errors.append(

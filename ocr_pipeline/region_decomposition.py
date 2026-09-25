@@ -213,7 +213,10 @@ def propose_regions(image: Path, inspection: Any, lines: list[dict[str, Any]],
                    "photo_foreground_share": round(foreground_share, 3),
                    "photo_foreground_entropy": round(foreground_entropy, 3),
                    "pixel_component_overlap": round(max((_inter(box, item) / max(1, _area(box))
-                                                          for item in pixel_components), default=0), 3)}
+                                                          for item in pixel_components), default=0), 3),
+                   "pixel_component_iou": round(max((
+                       _inter(box, item) / max(1, _area(box) + _area(item) - _inter(box, item))
+                       for item in pixel_components), default=0), 3)}
         if kind == "photograph":
             map_conflict = any(_inter(box, candidate) /
                                max(1.0, min(_area(box), _area(candidate))) >= 0.65
@@ -344,6 +347,35 @@ def select_regions(proposals: list[dict[str, Any]], lines: list[dict[str, Any]],
         used_ids.update(fresh)
         occupied.append((box, item["kind"]))
     return chosen
+
+
+def region_review_reasons(item: dict[str, Any], lines: list[dict[str, Any]]) -> list[str]:
+    """Review a supported region only when its content or physical owner is uncertain.
+
+    Proposal acceptance proves that a region exists. Passing additionally needs
+    enough independent evidence for its particular boundary and transcript.
+    """
+    kind = item["kind"]
+    origin = item["origin"]
+    support = item["support"]
+    if kind == "table":
+        return ["OCR grid does not independently establish table cell ownership"]
+    if kind == "map":
+        return ["geographic marks and printed labels need binding verification"]
+    if kind == "photograph":
+        if item["ocr_evidence_ids"]:
+            return ["printed text inside photograph needs a separate owner"]
+        if origin == "pdf_image_member":
+            return []
+        if (origin == "model_boundary" and
+                support.get("pixel_component_iou", 0) >= 0.8):
+            return []
+        return ["photograph extent lacks an independently matching pixel boundary"]
+    if origin != "ocr_cluster" or support.get("rapidocr_lines", 0) < 5:
+        return ["text panel boundary has limited independent OCR layout support"]
+    if any(float(line.get("confidence", 0)) < 0.8 for line in lines):
+        return ["one or more text lines have low OCR confidence"]
+    return []
 
 
 def empty_table_artifacts(blocks: list[dict[str, Any]],

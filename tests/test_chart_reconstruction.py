@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ocr_pipeline.pipeline import _scatter_axis_evidence, _stacked_pie_bindings
+from ocr_pipeline.visual_blocks import _scatter_axis_evidence, _stacked_pie_bindings
 
 
 def _line(evidence_id: str, text: str, x: float, y: float, width: float = 85) -> dict:

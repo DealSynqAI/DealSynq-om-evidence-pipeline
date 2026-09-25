@@ -9,12 +9,11 @@ from PIL import Image
 
 from ocr_pipeline.models import PageInspection, Region, SourceBlock, validate_source_blocks
 from ocr_pipeline.paddle_tables import screen_table_candidates_against_ocr
-from ocr_pipeline.pipeline import (
-    _claim_single_value_cards, _classify_visual, _linked_table_scalar_count,
-    _numeric_content_coverage, _preserve_ocr_lines_in_blocks,
-    _recover_vision_photo_regions, _spatial_residual_text_blocks, _table_blocks,
-    _visual_text_panel_blocks,
-)
+from ocr_pipeline.evidence_capture import _preserve_ocr_lines_in_blocks
+from ocr_pipeline.region_recovery import _recover_vision_photo_regions
+from ocr_pipeline.table_blocks import _linked_table_scalar_count, _numeric_content_coverage, _table_blocks
+from ocr_pipeline.text_blocks import _spatial_residual_text_blocks, _visual_text_panel_blocks
+from ocr_pipeline.visual_blocks import _classify_visual
 from ocr_pipeline.vision_first import apply_plan_hints
 
 
@@ -251,7 +250,13 @@ def test_photo_collage_grid_requires_numeric_cell_density() -> None:
 
 def test_numeric_grid_remains_table() -> None:
     region = Region("r1", 1, "visual", [0, 0, 1000, 1000], 1, "test", 0.7)
-    lines = [{"text": "Address"}, {"text": "Sale Price"}] + [{"text": str(index)} for index in range(10)]
+    lines = [{"evidence_id": "p001-ocr-0001", "text": "Address", "coordinates": [100, 100, 120, 20]},
+             {"evidence_id": "p001-ocr-0002", "text": "Sale Price", "coordinates": [500, 100, 120, 20]}]
+    for row in range(5):
+        lines += [{"evidence_id": f"p001-ocr-{10 + row * 2}", "text": f"{row + 1}0 Main St",
+                   "coordinates": [100, 140 + row * 40, 120, 20]},
+                  {"evidence_id": f"p001-ocr-{11 + row * 2}", "text": f"${row + 2},250,000",
+                   "coordinates": [500, 140 + row * 40, 120, 20]}]
     kind, _, _ = _classify_visual(region, lines, {
         "horizontal_lines": 10, "vertical_lines": 4, "table_grid_confidence": 0.9,
     })
@@ -403,20 +408,6 @@ def test_single_metric_vision_card_can_claim_its_full_box() -> None:
     }]})
     assert region.metadata["vision_plan"]["type"] == "kpi_panel"
     assert region.metadata["ownership_coordinates"] == [90, 90, 220, 220]
-
-
-def test_single_value_card_claims_printed_caption_and_keeps_range() -> None:
-    card = Region("card", 1, "table", [50, 300, 250, 120], 1, "test", 0.8,
-                  metadata={"rows": [[None, "24-27%"], [None, None]]})
-    caption_region = Region("caption", 1, "normal_text", [50, 420, 250, 70], 2, "test", 0.9)
-    value = {"evidence_id": "v", "text": "24-27%", "coordinates": [80, 340, 120, 50]}
-    caption = {"evidence_id": "l", "text": "IRR (5 year hold)", "coordinates": [80, 430, 180, 35]}
-    owned = {"card": [value], "caption": [caption]}
-    absorbed = _claim_single_value_cards([card, caption_region], [value, caption], owned)
-    assert absorbed == {"caption"}
-    assert card.metadata["single_card_binding"]["label"] == "IRR (5 year hold)"
-    assert card.metadata["single_card_binding"]["numeric_value"] is None
-    assert {line["evidence_id"] for line in owned["card"]} == {"v", "l"}
 
 
 def test_kpi_hints_keep_separate_card_ownership_boxes() -> None:

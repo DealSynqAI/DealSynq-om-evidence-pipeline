@@ -125,8 +125,6 @@ def test_native_table_cell_is_retained_when_vision_disagrees() -> None:
 def test_pipeline_requires_both_independent_branches() -> None:
     with pytest.raises(ValueError, match="mandatory"):
         run_pipeline(Path("input.pdf"), Path("unused"), qwen_endpoint=None)
-    with pytest.raises(ValueError, match="mandatory"):
-        run_pipeline(Path("input.pdf"), Path("unused"), qwen_endpoint="http://localhost", skip_ocr=True)
 
 
 def test_map_route_requires_registered_geometry() -> None:

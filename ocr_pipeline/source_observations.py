@@ -22,17 +22,23 @@ _NONPRINTED_CONTENT_KEYS = {
 }
 
 
+# Separators, bullets, and box rules. Symbol-font bullets land in the Unicode
+# private-use area, so that range counts too.
+_LAYOUT_GLYPHS = frozenset("�|~/•→&—│▪●■◆►◦")
+
+
 def is_layout_glyph(observation: dict[str, Any]) -> bool:
     """Identify short nonnumeric glyphs whose exact source text can be retained.
 
-    Currency signs, percent signs, and minus signs are excluded because they
-    can change a nearby numeric value. The retained glyph remains traceable to
-    its native PDF word and page coordinates.
+    Currency, percent, plus, and minus signs, hyphens, and en dashes are
+    excluded because they can change a nearby numeric value or range. The
+    retained glyph remains traceable to its native PDF word and page coordinates.
     """
     raw = str(observation.get("text") or "").strip()
     return (observation.get("source") == "native_pdf_word"
             and 0 < len(raw) <= 2
-            and all(character in "�|~/•→&" for character in raw))
+            and all(character in _LAYOUT_GLYPHS or 0xE000 <= ord(character) <= 0xF8FF
+                    for character in raw))
 
 
 def represented_in_content(observation: dict[str, Any], content: Any) -> bool:

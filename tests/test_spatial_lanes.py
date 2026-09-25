@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from ocr_pipeline.models import PageInspection, Region
-from ocr_pipeline.pipeline import _table_blocks
+from ocr_pipeline.table_blocks import _table_blocks
 from ocr_pipeline.spatial_lanes import split_mixed_key_value_regions
 
 
@@ -35,7 +35,11 @@ def test_mixed_key_value_lane_keeps_printed_pairs_and_separates_prose():
     block = _table_blocks("doc", "hash", table, lines[:2], Path("page-001.png"))[0].as_dict()
     assert block["content"]["rows"][0]["label_evidence_ids"] == ["p001-ocr-0001"]
     assert block["content"]["rows"][0]["cells"][0]["evidence_ids"] == ["p001-ocr-0002"]
-    assert block["validation"]["status"] == "needs_review"
+    # Every printed value has its own OCR evidence on its label's row.
+    assert block["validation"]["status"] == "passed"
+    table.metadata["cell_evidence_ids"][2][1] = []
+    unsupported = _table_blocks("doc", "hash", table, lines[:2], Path("page-001.png"))[0].as_dict()
+    assert unsupported["validation"]["status"] == "needs_review"
 
 
 def test_single_dense_table_does_not_split_without_prose_lane():

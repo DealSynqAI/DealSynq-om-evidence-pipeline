@@ -23,56 +23,63 @@ from ocr_pipeline.inspection import (
     _normalized_xywh,
 )
 from ocr_pipeline.models import PageInspection, Region, SourceBlock, validate_source_blocks
-from ocr_pipeline.workers import normalize_vision_payload
+from ocr_pipeline.brand_marks import (
+    _brand_visible_text,
+    _looks_like_brand_mark,
+    _recover_unassigned_brand_marks,
+)
+from ocr_pipeline.common import (
+    VISION_DIAGNOSTIC_SCHEMA_VERSION,
+    _ocr_text,
+    _numeric_value,
+    _provenance,
+    _vision_summary,
+    _write_vision_diagnostic,
+    clean_text,
+)
+from ocr_pipeline.line_ownership import (
+    _exclusive_region_lines,
+    _reconstruct_vertical_values,
+    _reconstruct_vertical_words,
+    _split_visual_text_lines,
+)
+from ocr_pipeline.page_layout import (
+    _normalize_page_heading_roles,
+    _order_overlapping_visual_headings,
+    _arrange_page_blocks,
+)
 from ocr_pipeline.pipeline import (
     COLLECTION_SCHEMA_VERSION,
     INSPECTION_SCHEMA_VERSION,
     INSPECTION_INDEX_SCHEMA_VERSION,
     PAGE_SCHEMA_VERSION,
     PIPELINE_VERSION,
-    VISION_DIAGNOSTIC_SCHEMA_VERSION,
-    _bar_bindings,
-    _classify_visual,
-    _brand_visible_text,
-    _table_total_reconciliation,
-    _table_structure_errors,
-    _table_blocks,
-    _exclusive_region_lines,
+    parse_pages,
+)
+from ocr_pipeline.table_blocks import _table_total_reconciliation, _table_structure_errors, _table_blocks
+from ocr_pipeline.text_blocks import (
     _hybrid_text,
     _merge_owned_native_word_insertions,
     _append_distinct_ocr_identifiers,
-    _ocr_text,
-    _kpi_bindings,
-    _map_data_value_lines,
-    _reconstruct_vertical_values,
-    _reconstruct_vertical_words,
-    _infer_chart_type,
     _inline_heading_subsection_blocks,
-    _ground_model_bindings,
-    _numeric_value,
-    _provenance,
-    _proximity_bindings,
-    _qwen_semantic_prompt,
-    _reconcile_visual_bindings,
-    _visual_title,
-    _vision_summary,
-    _write_vision_diagnostic,
-    _looks_like_brand_mark,
     _leading_heading_body_blocks,
     _parse_contact_details,
     _profile_biography_blocks,
-    _recover_unassigned_brand_marks,
     _semantic_role_for_text,
-    _normalize_page_heading_roles,
-    _order_overlapping_visual_headings,
-    _pie_label_value_grounding,
-    _suppress_visual_observation_text_duplicates,
     _semantic_page_band_blocks,
-    _arrange_page_blocks,
-    _split_visual_text_lines,
     _text_structure,
-    clean_text,
-    parse_pages,
+)
+from ocr_pipeline.visual_blocks import (
+    _bar_bindings,
+    _classify_visual,
+    _kpi_bindings,
+    _map_data_value_lines,
+    _infer_chart_type,
+    _ground_model_bindings,
+    _proximity_bindings,
+    _reconcile_visual_bindings,
+    _visual_title,
+    _pie_label_value_grounding,
 )
 from ocr_pipeline.validate_run import _resolve_run_path
 from ocr_pipeline.map_geometry import _albers_point, _state_rings, register_us_state_map, state_for_value
@@ -127,25 +134,13 @@ class PipelineUnitTests(unittest.TestCase):
         region = Region("p001-r001", 1, "table", [30, 80, 940, 600], 1, "synthetic", 0.68,
                         metadata={"rows": [["left background", "right background"]],
                                   "native_panel_words": words})
-        review = {
-            "type": "table", "panel_review": {"lane_count": 3,
-                "leaf_titles": ["Senior Units", "Class B Shares", "Direct SPVs"],
-                "claim_counts": [2, 2, 2], "structure_matches": True},
-        }
-        block = _table_blocks("synthetic-doc", "0" * 64, region, [], Path("page.png"), review)[0]
-        self.assertEqual(block.validation_status, "passed")
+        block = _table_blocks("synthetic-doc", "0" * 64, region, [], Path("page.png"))[0]
+        self.assertEqual(block.type, "comparison_panel")
+        self.assertEqual(block.validation_status, "needs_review")
         schema = json.loads((Path(__file__).resolve().parents[1] /
                              "schemas/unified-source-block.schema.json").read_text(encoding="utf-8"))
         Draft202012Validator.check_schema(schema)
         self.assertEqual(list(Draft202012Validator(schema).iter_errors(block.as_dict())), [])
-
-        review["panel_review"]["structure_matches"] = False
-        flag_only = _table_blocks("synthetic-doc", "0" * 64, region, [], Path("page.png"), review)[0]
-        self.assertEqual(flag_only.validation_status, "passed")
-        self.assertIn("flag is false", " ".join(flag_only.warnings))
-        review["panel_review"]["claim_counts"] = [2, 1, 2]
-        conflicted = _table_blocks("synthetic-doc", "0" * 64, region, [], Path("page.png"), review)[0]
-        self.assertEqual(conflicted.validation_status, "needs_review")
 
     def test_comparison_layout_declines_non_bulleted_two_cell_visual(self) -> None:
         words = [
@@ -504,29 +499,6 @@ class PipelineUnitTests(unittest.TestCase):
         self.assertEqual(summary["horizontal_line_count"], 4)
         self.assertEqual(summary["bar_candidate_count"], 3)
         self.assertNotIn("line_segments", summary)
-
-    def test_vision_payload_is_normalized_to_routing_contract(self) -> None:
-        payload = normalize_vision_payload({
-            "type": " Chart ", "confidence": "1.4", "chart_type": " BAR ",
-            "bindings": [{"label": "A", "value": "1"}, "invalid"], "extra": "discarded",
-            "table_review": {"data_row_count": 3, "column_count": 2},
-        })
-        self.assertEqual(payload["type"], "chart")
-        self.assertEqual(payload["confidence"], 1.0)
-        self.assertEqual(payload["chart_type"], "bar")
-        self.assertEqual(payload["bindings"], [{"label": "A", "value": "1"}])
-        self.assertEqual(payload["table_review"], {"data_row_count": 3, "column_count": 2})
-        self.assertNotIn("extra", payload)
-
-    def test_semantic_vision_prompt_uses_ocr_evidence_after_geometry(self) -> None:
-        region = Region("p001-r001", 1, "visual", [0, 0, 1000, 800], 1, "geometry", 0.9)
-        prompt = _qwen_semantic_prompt("chart", [
-            {"evidence_id": "label-1", "text": "Office", "coordinates": [100, 100, 60, 20]},
-            {"evidence_id": "value-1", "text": "12.5%", "coordinates": [100, 130, 50, 20]},
-        ], region)
-        self.assertIn("after OCR and OpenCV geometry", prompt)
-        self.assertIn("label-1", prompt)
-        self.assertIn("value_evidence_id", prompt)
 
     def test_qwen_bindings_are_grounded_and_reconciled_without_replacement(self) -> None:
         lines = [
@@ -905,31 +877,6 @@ class PipelineUnitTests(unittest.TestCase):
         errors = validate_source_blocks([chart])
         self.assertTrue(any("cannot be marked passed" in error for error in errors))
         self.assertTrue(any("cannot claim slice mark coordinates" in error for error in errors))
-
-    def test_native_copy_of_owned_chart_label_value_is_suppressed(self) -> None:
-        observation = {
-            "category": "Education", "raw_value": "12.5%",
-            "label_evidence_id": "label-1", "value_evidence_id": "value-1",
-            "label_coordinates": [178, 448, 96, 28],
-            "value_coordinates": [199, 480, 48, 29],
-        }
-        chart = SourceBlock(
-            "doc", "chart", 1, "chart", {"observations": [observation]},
-            [167, 200, 676, 661], ["OCR"], 0.9, "passed",
-        )
-        duplicate = SourceBlock(
-            "doc", "heading", 1, "duplicate",
-            {"text": "Education 12.5%", "evidence_text": {"selected": "native"}},
-            [181, 454, 90, 59], ["native"], 1.0, "passed",
-        )
-        separate = SourceBlock(
-            "doc", "heading", 1, "separate",
-            {"text": "Education 12.5%", "evidence_text": {"selected": "native"}},
-            [40, 80, 90, 59], ["native"], 1.0, "passed",
-        )
-        blocks = [chart, duplicate, separate]
-        _suppress_visual_observation_text_duplicates(blocks)
-        self.assertEqual([block.block_id for block in blocks], ["chart", "separate"])
 
     def test_numeric_summary_is_not_a_second_page_title(self) -> None:
         title = SourceBlock(
@@ -1387,3 +1334,18 @@ class PipelineUnitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_late_review_flag_reaches_every_ancestor_group() -> None:
+    from ocr_pipeline.evidence_capture import _propagate_group_status
+
+    def block(block_id, kind, depth, children=(), status="passed"):
+        return {"block_id": block_id, "type": kind,
+                "hierarchy": {"depth": depth, "child_block_ids": list(children)},
+                "validation": {"status": status, "warnings": [], "errors": []}}
+
+    blocks = [block("outer", "group", 0, ["inner"]), block("inner", "group", 1, ["leaf"]),
+              block("leaf", "text", 2, status="needs_review")]
+    _propagate_group_status(blocks)
+    assert [item["validation"]["status"] for item in blocks] == ["needs_review"] * 3
+    assert blocks[0]["validation"]["warnings"] == ["one or more child blocks require review"]

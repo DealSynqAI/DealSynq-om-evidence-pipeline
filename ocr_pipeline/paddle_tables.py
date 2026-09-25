@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
 import re
+import statistics
 from typing import Any
 
 from .models import PageInspection, Region
@@ -78,13 +80,6 @@ class _TableParser(HTMLParser):
             self.row_cell_indices = None
 
 
-def html_rows(html: str) -> list[list[str]]:
-    parser = _TableParser()
-    parser.feed(html)
-    width = max((len(row) for row in parser.rows), default=0)
-    return [row + [""] * (width - len(row)) for row in parser.rows]
-
-
 def html_rows_with_cell_indices(html: str) -> tuple[list[list[str]], list[list[int | None]], int]:
     parser = _TableParser()
     parser.feed(html)
@@ -126,15 +121,15 @@ def _cell_key(value: Any) -> str:
     return re.sub(r"\s+", "", str(value or "")).casefold()
 
 
-def page_needs_table_analysis(
-    inspection: PageInspection, plan: dict[str, Any] | None,
-    ocr_page: dict[str, Any],
-) -> bool:
-    """Select likely table pages without requiring a native parser hit."""
+def page_needs_table_analysis(inspection: PageInspection, ocr_page: dict[str, Any]) -> bool:
+    """Select likely table pages from native and OCR evidence only.
+
+    The vision plan is deliberately not consulted, so the deterministic branch
+    stays independent of the model it is later reconciled against.
+    """
     if any(region.kind == "table" for region in inspection.regions):
         return True
-    if plan and any(block.get("type") == "table" and len(block.get("rows") or []) >= 2
-                    for block in plan.get("blocks", [])):
+    if ocr_grid_rows(ocr_page.get("lines", [])) >= 4:
         return True
     for region in inspection.regions:
         if region.kind not in {"visual", "normal_text"}:
@@ -148,6 +143,92 @@ def page_needs_table_analysis(
         )
         if numeric >= (6 if region.kind == "visual" else 8):
             return True
+    return False
+
+
+def ocr_grid_rows(lines: list[dict[str, Any]], min_columns: int = 3) -> int:
+    """Count OCR rows whose cells share column edges with other rows.
+
+    A printed table shows up as repeated left or right edges across rows even
+    when neither the PDF parser nor region inspection bounded it. Rows are only
+    counted when at least 30% of their cells carry digits.
+    """
+    lines = [line for line in lines
+             if "-ocr-" in str(line.get("evidence_id", "")) and str(line.get("text", "")).strip()]
+    if len(lines) < 4 * min_columns:
+        return 0
+    height = statistics.median(line["coordinates"][3] for line in lines)
+    rows: list[list[dict[str, Any]]] = []
+    last_center = None
+    for line in sorted(lines, key=lambda item: item["coordinates"][1] + item["coordinates"][3] / 2):
+        center = line["coordinates"][1] + line["coordinates"][3] / 2
+        if rows and abs(center - last_center) <= 0.5 * height:
+            rows[-1].append(line)
+        else:
+            rows.append([line])
+        last_center = center
+    rows = [row for row in rows if len(row) >= min_columns]
+
+    def edges(line: dict[str, Any]) -> tuple[tuple[str, int], tuple[str, int]]:
+        x, _y, width, _height = line["coordinates"]
+        return ("left", round(x / 12)), ("right", round((x + width) / 12))
+
+    counts = Counter(edge for row in rows for line in row for edge in edges(line))
+    anchors = {edge for edge, count in counts.items() if count >= 4}
+    aligned = [row for row in rows
+               if sum(any(edge in anchors for edge in edges(line)) for line in row) >= min_columns]
+    cells = [line for row in aligned for line in row]
+    numeric = sum(any(character.isdigit() for character in str(line["text"])) for line in cells)
+    return len(aligned) if numeric >= 0.3 * max(1, len(cells)) else 0
+
+
+def ocr_paired_columns(lines: list[dict[str, Any]], min_rows: int = 4) -> bool:
+    """Whether OCR lines form at least two columns that run down the same rows.
+
+    Catches narrow tables (a label or rate column beside a value column) that
+    ocr_grid_rows needs three cells per row to see. The second column must share
+    most of the first column's rows, so data labels at the ends of bars of
+    similar length, which line up only in short runs, do not count, and one of
+    the two must be mostly numbers, so two columns of prose do not count either.
+    """
+    lines = [line for line in lines
+             if "-ocr-" in str(line.get("evidence_id", "")) and str(line.get("text", "")).strip()]
+    if len(lines) < 2 * min_rows:
+        return False
+    height = statistics.median(line["coordinates"][3] for line in lines)
+    rows: list[list[dict[str, Any]]] = []
+    last_center = None
+    for line in sorted(lines, key=lambda item: item["coordinates"][1] + item["coordinates"][3] / 2):
+        center = line["coordinates"][1] + line["coordinates"][3] / 2
+        if rows and abs(center - last_center) <= 0.5 * height:
+            rows[-1].append(line)
+        else:
+            rows.append([line])
+        last_center = center
+    columns: dict[tuple[str, int], set[int]] = {}
+    spans: dict[tuple[str, int], list[tuple[float, float]]] = {}
+    digits: dict[tuple[str, int], list[bool]] = {}
+    for index, row in enumerate(rows):
+        for line in row:
+            x, _y, width, _height = line["coordinates"]
+            for edge in (("left", round(x / 12)), ("right", round((x + width) / 12))):
+                columns.setdefault(edge, set()).add(index)
+                spans.setdefault(edge, []).append((x, x + width))
+                digits.setdefault(edge, []).append(any(character.isdigit() for character in str(line["text"])))
+    columns = {edge: found for edge, found in columns.items() if len(found) >= min_rows}
+    ordered = sorted(columns, key=lambda edge: len(columns[edge]), reverse=True)
+    for position, first in enumerate(ordered):
+        first_left = min(start for start, _end in spans[first])
+        first_right = max(end for _start, end in spans[first])
+        for second in ordered[position + 1:]:
+            # The second column must be other cells, not the other edge of the first.
+            if any(start < first_right and end > first_left for start, end in spans[second]):
+                continue
+            shared = columns[first] & columns[second]
+            # Two columns of prose are a text layout; a table has a value column.
+            numeric = any(sum(digits[edge]) >= 0.6 * len(digits[edge]) for edge in (first, second))
+            if numeric and len(shared) >= min_rows and len(shared) >= 0.6 * len(columns[first]):
+                return True
     return False
 
 

@@ -1,6 +1,6 @@
 from ocr_pipeline.models import PageInspection, Region
-from ocr_pipeline.paddle_tables import apply_paddle_tables, html_rows, page_needs_table_analysis, table_candidates
-from ocr_pipeline.pipeline import _ground_table_cells_from_ocr, _table_blocks
+from ocr_pipeline.paddle_tables import apply_paddle_tables, page_needs_table_analysis, table_candidates
+from ocr_pipeline.table_blocks import _ground_table_cells_from_ocr, _table_blocks
 from pathlib import Path
 import pytest
 
@@ -46,14 +46,6 @@ def test_native_values_remain_when_paddle_dimensions_disagree():
     apply_paddle_tables(_page(region), candidate)
     assert region.metadata["paddle_table_review"]["cell_disagreements"] == 1
     assert region.metadata["rows"][1][1] == "1"
-
-
-def test_html_cells_preserve_rows():
-    assert html_rows("<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>") == [
-        ["A", "B"], ["1", "2"]]
-    assert html_rows("<table><tr><th colspan='2'>Total</th></tr>"
-                     "<tr><td>1</td><td>2</td></tr></table>") == [
-                         ["Total", ""], ["1", "2"]]
 
 
 def test_paddle_cell_boxes_disambiguate_repeated_values_by_row():
@@ -115,12 +107,12 @@ def test_value_first_paddle_list_keeps_first_fact():
 
 def test_table_pages_include_native_and_unclassified_numeric_visuals():
     native = Region("p001-r001", 1, "table", [100, 100, 600, 400], 1, "native", 0.9)
-    assert page_needs_table_analysis(_page(native), None, {"lines": []})
+    assert page_needs_table_analysis(_page(native), {"lines": []})
     visual = Region("p001-r002", 1, "visual", [100, 100, 600, 400], 1, "OpenCV", 0.5)
     lines = [{"text": str(index), "coordinates": [150, 150 + index * 20, 20, 10]}
              for index in range(6)]
-    assert page_needs_table_analysis(_page(visual), None, {"lines": lines})
-    assert not page_needs_table_analysis(_page(visual), None, {"lines": lines[:2]})
+    assert page_needs_table_analysis(_page(visual), {"lines": lines})
+    assert not page_needs_table_analysis(_page(visual), {"lines": lines[:2]})
 
 
 def test_collapsed_paddle_html_uses_layout_without_importing_values():
@@ -220,3 +212,15 @@ def test_small_heading_cannot_claim_whole_page_paddle_table():
     table = next(region for region in inspection.regions if region.kind == "table")
     assert table.region_id != heading.region_id
     assert table.coordinates == candidate["coordinates"]
+
+
+def test_aligned_numeric_ocr_grid_selects_a_page_without_a_table_region():
+    lines = [{"evidence_id": f"p001-ocr-{row * 3 + column:04d}", "text": text,
+              "coordinates": [100 + column * 250, 200 + row * 40, 90, 18]}
+             for row in range(5)
+             for column, text in enumerate([f"Unit {row}", f"{row + 1} BR", f"${row + 9},250"])]
+    # The region does not contain the lines, so only the page-level grid can select it.
+    prose = Region("p001-r001", 1, "normal_text", [0, 0, 50, 50], 1, "native", 0.9)
+    assert page_needs_table_analysis(_page(prose), {"lines": lines})
+    words = [dict(line, text="Tenant improvements") for line in lines]
+    assert not page_needs_table_analysis(_page(prose), {"lines": words})

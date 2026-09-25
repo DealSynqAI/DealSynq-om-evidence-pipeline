@@ -1,4 +1,4 @@
-from ocr_pipeline.pipeline import _ground_table_cells_from_ocr
+from ocr_pipeline.table_blocks import _ground_table_cells_from_ocr
 
 
 def _line(index, text, x, y):

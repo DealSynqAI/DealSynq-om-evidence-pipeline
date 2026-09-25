@@ -1,0 +1,708 @@
+{
+ "documents": {
+  "ameris": {
+   "recall_owner": 0.0,
+   "capture_any": 0.0,
+   "precision": 0.0,
+   "borrowed": 0.0,
+   "misread": 0.0,
+   "duplicated": 0.0,
+   "native_tokens": 0,
+   "produced": 0,
+   "blocks": 30,
+   "review": 13,
+   "fallback": 1,
+   "raw_lines": 73,
+   "invalid": 0,
+   "structure": {
+    "ocr_words_structured": 0.8079,
+    "table_numbers_in_cells": 0.6977,
+    "ocr_words": 1624,
+    "table_numbers": 43,
+    "sign_flips": 0,
+    "period_misreads": 0,
+    "tables": 2,
+    "empty_tables": 0,
+    "visuals": 1,
+    "visuals_with_data": 0
+   }
+  },
+  "chateau": {
+   "recall_owner": 0.9922,
+   "capture_any": 0.9991,
+   "precision": 0.9555,
+   "borrowed": 0.0167,
+   "misread": 0.0044,
+   "duplicated": 0.0233,
+   "native_tokens": 2191,
+   "produced": 2271,
+   "blocks": 213,
+   "review": 87,
+   "fallback": 32,
+   "raw_lines": 219,
+   "invalid": 0,
+   "structure": {
+    "ocr_words_structured": 0.9964,
+    "table_numbers_in_cells": 0.3373,
+    "ocr_words": 4205,
+    "table_numbers": 255,
+    "sign_flips": 0,
+    "period_misreads": 0,
+    "tables": 15,
+    "empty_tables": 1,
+    "visuals": 0,
+    "visuals_with_data": 0
+   }
+  },
+  "concourse": {
+   "recall_owner": 0.9818,
+   "capture_any": 0.9951,
+   "precision": 0.933,
+   "borrowed": 0.0034,
+   "misread": 0.0211,
+   "duplicated": 0.0426,
+   "native_tokens": 2255,
+   "produced": 2372,
+   "blocks": 167,
+   "review": 58,
+   "fallback": 14,
+   "raw_lines": 350,
+   "invalid": 0,
+   "structure": {
+    "ocr_words_structured": 0.8505,
+    "table_numbers_in_cells": 0.8919,
+    "ocr_words": 2997,
+    "table_numbers": 37,
+    "sign_flips": 0,
+    "period_misreads": 0,
+    "tables": 3,
+    "empty_tables": 0,
+    "visuals": 1,
+    "visuals_with_data": 0
+   }
+  },
+  "coulton": {
+   "recall_owner": 0.9651,
+   "capture_any": 0.9804,
+   "precision": 0.9845,
+   "borrowed": 0.0004,
+   "misread": 0.0008,
+   "duplicated": 0.0143,
+   "native_tokens": 2494,
+   "produced": 2446,
+   "blocks": 146,
+   "review": 38,
+   "fallback": 14,
+   "raw_lines": 368,
+   "invalid": 0,
+   "structure": {
+    "ocr_words_structured": 0.9671,
+    "table_numbers_in_cells": 1.0,
+    "ocr_words": 2738,
+    "table_numbers": 61,
+    "sign_flips": 0,
+    "period_misreads": 0,
+    "tables": 1,
+    "empty_tables": 0,
+    "visuals": 7,
+    "visuals_with_data": 6
+   }
+  },
+  "dinkeytown": {
+   "recall_owner": 1.0,
+   "capture_any": 1.0,
+   "precision": 0.9985,
+   "borrowed": 0.0015,
+   "misread": 0.0,
+   "duplicated": 0.0,
+   "native_tokens": 679,
+   "produced": 683,
+   "blocks": 6,
+   "review": 3,
+   "fallback": 1,
+   "raw_lines": 13,
+   "invalid": 0,
+   "structure": {
+    "ocr_words_structured": 0.9985,
+    "table_numbers_in_cells": 0.6522,
+    "ocr_words": 677,
+    "table_numbers": 23,
+    "sign_flips": 0,
+    "period_misreads": 0,
+    "tables": 1,
+    "empty_tables": 0,
+    "visuals": 0,
+    "visuals_with_data": 0
+   }
+  },
+  "haven-senior": {
+   "recall_owner": 1.0,
+   "capture_any": 1.0,
+   "precision": 1.0,
+   "borrowed": 0.0,
+   "misread": 0.0,
+   "duplicated": 0.0,
+   "native_tokens": 829,
+   "produced": 829,
+   "blocks": 70,
+   "review": 26,
+   "fallback": 16,
+   "raw_lines": 56,
+   "invalid": 0,
+   "structure": {
+    "ocr_words_structured": 0.9828,
+    "table_numbers_in_cells": 0.6333,
+    "ocr_words": 1163,
+    "table_numbers": 30,
+    "sign_flips": 0,
+    "period_misreads": 0,
+    "tables": 3,
+    "empty_tables": 3,
+    "visuals": 0,
+    "visuals_with_data": 0
+   }
+  },
+  "isabella": {
+   "recall_owner": 0.9461,
+   "capture_any": 0.9788,
+   "precision": 0.9466,
+   "borrowed": 0.0257,
+   "misread": 0.0215,
+   "duplicated": 0.0062,
+   "native_tokens": 2358,
+   "produced": 2417,
+   "blocks": 203,
+   "review": 51,
+   "fallback": 3,
+   "raw_lines": 361,
+   "invalid": 0,
+   "structure": {
+    "ocr_words_structured": 0.9371,
+    "table_numbers_in_cells": 0.8375,
+    "ocr_words": 8825,
+    "table_numbers": 1440,
+    "sign_flips": 0,
+    "period_misreads": 0,
+    "tables": 8,
+    "empty_tables": 0,
+    "visuals": 2,
+    "visuals_with_data": 0
+   }
+  },
+  "maravida": {
+   "recall_owner": 0.9817,
+   "capture_any": 0.9933,
+   "precision": 0.983,
+   "borrowed": 0.0026,
+   "misread": 0.0107,
+   "duplicated": 0.0038,
+   "native_tokens": 3443,
+   "produced": 3461,
+   "blocks": 158,
+   "review": 69,
+   "fallback": 31,
+   "raw_lines": 254,
+   "invalid": 0,
+   "structure": {
+    "ocr_words_structured": 0.9435,
+    "table_numbers_in_cells": 0.8867,
+    "ocr_words": 3596,
+    "table_numbers": 300,
+    "sign_flips": 0,
+    "period_misreads": 0,
+    "tables": 3,
+    "empty_tables": 0,
+    "visuals": 2,
+    "visuals_with_data": 0
+   }
+  },
+  "marble-hill": {
+   "recall_owner": 0.9384,
+   "capture_any": 0.9835,
+   "precision": 0.9874,
+   "borrowed": 0.0032,
+   "misread": 0.0079,
+   "duplicated": 0.0016,
+   "native_tokens": 666,
+   "produced": 633,
+   "blocks": 30,
+   "review": 7,
+   "fallback": 0,
+   "raw_lines": 133,
+   "invalid": 0,
+   "structure": {
+    "ocr_words_structured": 0.9833,
+    "table_numbers_in_cells": 0.6667,
+    "ocr_words": 1434,
+    "table_numbers": 72,
+    "sign_flips": 0,
+    "period_misreads": 0,
+    "tables": 2,
+    "empty_tables": 0,
+    "visuals": 0,
+    "visuals_with_data": 0
+   }
+  },
+  "torquoise": {
+   "recall_owner": 0.9797,
+   "capture_any": 1.0,
+   "precision": 0.9634,
+   "borrowed": 0.0113,
+   "misread": 0.0,
+   "duplicated": 0.0254,
+   "native_tokens": 345,
+   "produced": 355,
+   "blocks": 17,
+   "review": 9,
+   "fallback": 1,
+   "raw_lines": 28,
+   "invalid": 0,
+   "structure": {
+    "ocr_words_structured": 1.0,
+    "table_numbers_in_cells": 1.0,
+    "ocr_words": 344,
+    "table_numbers": 12,
+    "sign_flips": 0,
+    "period_misreads": 0,
+    "tables": 2,
+    "empty_tables": 0,
+    "visuals": 0,
+    "visuals_with_data": 0
+   }
+  },
+  "winter-haven": {
+   "recall_owner": 1.0,
+   "capture_any": 1.0,
+   "precision": 0.9993,
+   "borrowed": 0.0007,
+   "misread": 0.0,
+   "duplicated": 0.0,
+   "native_tokens": 1503,
+   "produced": 1528,
+   "blocks": 64,
+   "review": 18,
+   "fallback": 1,
+   "raw_lines": 50,
+   "invalid": 0,
+   "structure": {
+    "ocr_words_structured": 0.9407,
+    "table_numbers_in_cells": 0.6646,
+    "ocr_words": 3476,
+    "table_numbers": 319,
+    "sign_flips": 0,
+    "period_misreads": 0,
+    "tables": 9,
+    "empty_tables": 1,
+    "visuals": 0,
+    "visuals_with_data": 0
+   }
+  }
+ },
+ "total": {
+  "recall_owner": 0.9771,
+  "capture_any": 0.9913,
+  "precision": 0.9701,
+  "borrowed": 0.0074,
+  "misread": 0.0092,
+  "duplicated": 0.0134,
+  "blocks": 1104,
+  "review": 379,
+  "fallback": 114,
+  "raw_lines": 1905,
+  "invalid": 0,
+  "structure": {
+   "ocr_words_structured": 0.9397,
+   "table_numbers_in_cells": 0.767,
+   "ocr_words": 31079,
+   "table_numbers": 2592,
+   "sign_flips": 0,
+   "period_misreads": 0,
+   "tables": 49,
+   "empty_tables": 5,
+   "visuals": 13,
+   "visuals_with_data": 6
+  }
+ },
+ "golden": {
+  "cell coulton p6 Industrial Real Estate / Total Invested": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell coulton p6 Multifamily Real Estate / Non-controlling Interest": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell coulton p6 Residential Development / Leverage (CCC Debt)": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell coulton p6 Retail Real Estate / Return of Capital": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell coulton p6 Real Estate Bridge Loans / % of CCC Equity": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell coulton p6 Total Investment Portfolio / Coulton Creek Equity": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell isabella p10 776 Bolyston St / Sale Price": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell isabella p10 94 Chestnut St / $/SF": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell isabella p10 430 Stuart St / List Price": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell isabella p10 27 Isabella St / Square Feet": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell isabella p10 Average / Sale Price": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell winter-haven p2 7.50% / Returns": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell winter-haven p2 5.50% / Returns": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell winter-haven p3 ABS, Enclosed-Reimbursements / Year 2 Dec-27": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell winter-haven p4 EquityMultiple Share of Net Levered Cash Flow / Acquisition": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell winter-haven p3 Total Potential Income / Year 1 Dec-26": {
+   "expect": "known_failure",
+   "result": "fail"
+  },
+  "cell winter-haven p3 Vacancy & Credit Loss / Year 1 Dec-26": {
+   "expect": "known_failure",
+   "result": "fail"
+  },
+  "cell winter-haven p3 NET OPERATING INCOME / Year 7 Dec-32": {
+   "expect": "known_failure",
+   "result": "fail"
+  },
+  "cell chateau p12 Roof Type / Value": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell chateau p12 Water/Sewer / Value": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell chateau p21 Deal Level IRR / Value": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell chateau p21 Sales Price / Value": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell torquoise p1 Total LP Investment / Value": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell torquoise p1 IRR / Value": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell haven-senior p7 IRR (pp) / +5%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell haven-senior p7 IRR (pp) / +100 bps": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "cell winter-haven p3 Total Potential Income / Year 2 Dec-27": {
+   "expect": "known_failure",
+   "result": "fail"
+  },
+  "cell winter-haven p3 Total Operating Expenses / In-Place": {
+   "expect": "known_failure",
+   "result": "fail"
+  },
+  "cell winter-haven p3 Asset Management Fee / Year 1 Dec-26": {
+   "expect": "known_failure",
+   "result": "fail"
+  },
+  "cell winter-haven p3 Senior Loan Debt Yield / Year 1 Dec-26": {
+   "expect": "known_failure",
+   "result": "fail"
+  },
+  "cell winter-haven p4 EquityMultiple Share of Net Levered Cash Flow1 / Acquisition": {
+   "expect": "known_failure",
+   "result": "fail"
+  },
+  "cell isabella p12 Net Monthly Cash Flow / 4/10/26": {
+   "expect": "known_failure",
+   "result": "fail"
+  },
+  "cell chateau p21 Effective Gross Income / Year 1": {
+   "expect": "known_failure",
+   "result": "fail"
+  },
+  "visual coulton p9 Coulton Creek Capital = 68%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p9 SPV LPs = 31%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p9 Founders & Employees = 26%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p9 Other Investors = 42%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p9 Return of Capital = 0.7%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p11 2014 = 11.3%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p11 2017 = 18.9%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p11 2023 = 18.5%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p13 2019 = $12.5M": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p13 2019 = 11.0x": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p13 2023 = 8.7x": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p14 Jun-18 = 9%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p14 Sep-19 = 22%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p14 Dec-23 = 10%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p8 Colorado = 41.4%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p8 Pennsylvania = 10.1%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p8 Massachusetts = 1.3%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p8 Connecticut = 1.3%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p8 New Jersey = 4.3%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p8 Maryland = 0.4%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p8 Texas = 8.0%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p8 Puerto Rico = 1.4%": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p3 Investments Funded to Date = $277 million": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p3 Current Portfolio at cost basis = $146 million": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "visual coulton p3 Investments = 168": {
+   "expect": "known_failure",
+   "result": "fail"
+  },
+  "visual concourse p11 1100 Tyler Ave #207 = $1124 | 13 yrs": {
+   "expect": "known_failure",
+   "result": "fail"
+  },
+  "review coulton p6 table Multifamily Real Estate -> passed": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review isabella p10 table 776 Bolyston St -> passed": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review haven-senior p7 table Labor vs. Base -> passed": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review haven-senior p7 table Exit Cap Shift -> passed": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review winter-haven p2 table 7.50% -> passed": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review chateau p12 table Roof Type -> passed": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review chateau p12 table Water/Sewer -> passed": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review chateau p21 table Deal Level IRR -> passed": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review chateau p21 table Sales Price -> passed": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review torquoise p1 table LP Net Return -> passed": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review coulton p11 chart 2014 -> passed": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review coulton p14 chart Jun-18 -> passed": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review coulton p8 map Colorado -> passed": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review isabella p12 table Senior Loan Balance -> needs_review": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review isabella p15 table 73400967 -> needs_review": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review winter-haven p3 table NET OPERATING INCOME -> needs_review": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review winter-haven p4 table EquityMultiple Share of Net Levered Cash Flow -> needs_review": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review winter-haven p4 table EquityMultiple Share of Net Levered Cash Flow1 -> needs_review": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review winter-haven p5 table $156,750 (one-time) -> needs_review": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review chateau p21 table Operating Expenses -> needs_review": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review chateau p21 table Cash-on-Cash Return 5.84% 8.90% 7.77% 8.46% -> needs_review": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review chateau p12 table 1x1 A (Classic) 75 800 $1,093 $1.37 $1,105 -> needs_review": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review concourse p15 table Debt (@70% LTC) -> needs_review": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review maravida p6 chart None -> needs_review": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "review coulton p3 kpi_panel Investments Funded to Date -> needs_review": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "no chart chateau p5": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "no chart chateau p13": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "no chart chateau p18": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "no chart chateau p23": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "no chart concourse p12": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "no chart concourse p13": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "no chart concourse p15": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "no chart concourse p16": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "no chart isabella p4": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "no chart maravida p13": {
+   "expect": "pass",
+   "result": "pass"
+  },
+  "no chart maravida p14": {
+   "expect": "pass",
+   "result": "pass"
+  }
+ }
+}

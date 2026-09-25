@@ -5,10 +5,9 @@ import hashlib
 import json
 
 from ocr_pipeline.models import PageInspection, Region
-from ocr_pipeline.pipeline import (
-    _absorb_structured_visual_text, _separate_visual_footnotes, _ocr_text, _parse_contact_details,
-    _numeric_value,
-)
+from ocr_pipeline.common import _ocr_text, _numeric_value
+from ocr_pipeline.line_ownership import _separate_visual_footnotes
+from ocr_pipeline.text_blocks import _parse_contact_details
 from ocr_pipeline.vision_first import apply_plan_hints, overlap_of_smaller, plan_pages
 from ocr_pipeline.vision_plan import PROMPT
 
@@ -91,34 +90,6 @@ def test_cache_requires_exact_image_model_prompt_and_valid_schema(tmp_path: Path
     assert summary["complete_pages"] == 1
     receipt = json.loads((tmp_path / "out/page-001.receipt.json").read_text(encoding="utf-8"))
     assert receipt["verified_cache"]["source_proposal_sha256"]
-
-
-def test_exact_isolated_chart_item_moves_evidence_not_general_prose() -> None:
-    inspection = _inspection()
-    visual = inspection.regions[1]
-    visual.kind = "visual"
-    visual.coordinates = [100, 100, 800, 700]
-    visual.metadata["vision_plan"] = {"type": "chart", "block_index": 0}
-    label_region = Region("label", 1, "normal_text", [150, 200, 120, 80], 3, "native", 1)
-    prose_region = Region("prose", 1, "normal_text", [300, 300, 180, 90], 4, "native", 1)
-    inspection.regions.extend([label_region, prose_region])
-    lines = {
-        visual.region_id: [],
-        label_region.region_id: [
-            {"evidence_id": "l1", "text": "Healthcare"},
-            {"evidence_id": "l2", "text": "0.9%"},
-        ],
-        prose_region.region_id: [
-            {"evidence_id": "p1", "text": "A paragraph"},
-            {"evidence_id": "p2", "text": "0.9%"},
-        ],
-    }
-    absorbed = _absorb_structured_visual_text(
-        inspection, lines, {"blocks": [{"items": [{"label": "Healthcare", "value": "0.9%"}]}]},
-    )
-    assert absorbed == {"label"}
-    assert [line["evidence_id"] for line in lines[visual.region_id]] == ["l1", "l2"]
-    assert len(lines["prose"]) == 2
 
 
 def test_marked_visual_note_is_separate_from_chart_values() -> None:
